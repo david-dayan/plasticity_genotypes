@@ -1,0 +1,42 @@
+"0","#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set the number of cpus
+#SBATCH --cpus-per-task=6
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-02:00:00
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=fastqc
+
+# set name of output file
+#SBATCH --output=fastqc.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+files=\"H7T6MADXX_1
+H7T6MADXX_2
+H9AREADXX_1
+H9AREADXX_2
+H9CWFADXX_1
+H9WYGADXX_1
+H9WYGADXX_2
+HMMKLADXX_1
+HMMKLADXX_2
+\"
+
+for file in $files
+do
+/home/jgibbons/SOFTWARE/FastQC/fastqc -t 4 /home/ddayan/fundulus/seqdata/${file}_fastq.gz -o /home/ddayan/fundulus/seqdata/fastqc
+
+done"

@@ -1,0 +1,28 @@
+"0","#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of output file
+#SBATCH --output=library_%a_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+#set the array
+#SBATCH --array=H7T6MADXX_1,H7T6MADXX_2,H9AREADXX_1,H9AREADXX_2,H9CWFADXX_1,H9WYGADXX_1,H9WYGADXX_2,HMMKLADXX_1,HMMKLADXX_2
+
+# set name of job
+#SBATCH --job-name=library_%a_process_radtags
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/process_radtags -f ./seqdata/${SLURM_ARRAY_TASK_ID}_fastq.gz -b ./metadata/${SLURM_ARRAY_TASK_ID}_key_barcodes.txt -o ./cleaned_tags -e aseI --inline-null -c -q -r --adapter-1 AGATCGGAAGAGCCGTTCAGCAGGAATGCCGAGACCGATCTCG  &> ./cleaned_tags/pr_library_${SLURM_ARRAY_TASK_ID}.oe"

@@ -1,0 +1,23 @@
+"0","#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of output file
+#SBATCH --output=library_%a_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/process_radtags -f ./seqdata/HMMKLADXX_2_fastq.gz -b ./meta_data/HMMKLADXX_2_key_barcodes.txt -o ./cleaned_tags -e aseI --inline-null -c -q -r --adapter-1 AGATCGGAAGAGCCGTTCAGCAGGAATGCCGAGACCGATCTCG  &> ./cleaned_tags/pr_library_HMMKLADXX_2.oe"

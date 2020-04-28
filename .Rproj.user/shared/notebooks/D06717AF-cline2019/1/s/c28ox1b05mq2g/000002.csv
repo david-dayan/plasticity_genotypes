@@ -1,0 +1,4 @@
+"0","rm ./snp_calling/*.tmp
+rm ./snp_calling/*[12]_key.csv
+mkdir ./snp_calling/barcode_keys
+mv ./snp_calling/* ./snp_calling/barcode_keys"

@@ -1,0 +1,10 @@
+"0","for i in ./snp_calling/*csv
+do
+  cut -d \",\" -f 2,3 $i > ${i%.csv}.tmp
+done
+
+
+for i in ./snp_calling/*tmp
+do
+    tr \",\" \"\\t\" < $i > ${i%.tmp}_barcodes.txt
+done"

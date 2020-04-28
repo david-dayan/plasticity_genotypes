@@ -1,0 +1,5 @@
+"0","ANGSD=/opt/angsd0.928/angsd/angsd
+
+$ANGSD/angsd -P 4 -b ALL.bamlist -ref $REF -out Results/ALL.qc -r 11\
+  -uniqueOnly 1 -remove_bads 1 -only_proper_pairs 1 -trim 0 -C 50 -baq 1 \
+	-minMapQ 20 -doQsDist 1 -doDepth 1 -doCounts 1"

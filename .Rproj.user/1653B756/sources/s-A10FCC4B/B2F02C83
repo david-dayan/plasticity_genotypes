@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1588043101319.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "B2F02C83",
+    "lastKnownWriteTime" : 1586222841,
+    "last_content_update" : 1586222841,
+    "path" : "~/Science/fundulus_clinal/cline_2019_git/cline2019.Rmd",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "20,13",
+        "scrollLine" : "10"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

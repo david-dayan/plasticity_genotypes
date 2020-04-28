@@ -1,15 +1,31 @@
 ---
 title: "Stacks Log"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
 ---
 
-### Summary
+# Summary
 
 Does cryptic genetic variation contribute to the adaptive divergence of freshwater populations of threespine stickleback? Let's get that genomic data to start figuring it out.
 
 This log describes the process of genotyping 2600 stickleback from raw illumina hiseq reads using Stacks v2
 
-### Server Directory
+```{r, warning=FALSE, message=FALSE}
+# prep the environment
+require(tidyverse)
+theme_set(theme_classic())
+require(vcfR)
+require(whoa)
+require(cowplot)
+```
+
+
+# Server Directory
 
 plastic #top directory
 	seq_data #all sequencing data
@@ -21,11 +37,11 @@ plastic #top directory
 		slurm #all stacks slurm jobs
 		cleaned #cleaned radtags
 		
-##### seqdata
+### seqdata
 for processradtags each set of PE data needs to be in its own directory, write shell script to accomplish this
 
 
-```{bash}
+```{bash, eval = FALSE}
 for f in *.fastq.gz; do
     name=`echo "$f"|sed 's/_R[12]_001.fastq.gz//'`
     dir="$name"
@@ -35,13 +51,14 @@ done
 ```
 
 
+# Stacks Run 0.1
 
-### Fish metadata
-##### Barcodes
+## Fish metadata
+### Barcodes
 
 Used a python script to split the file 'master_barcode_key.txt' into separate files for each lane.
 
-```{python barcode_splitter, python.reticulate = FALSE}
+```{python barcode_splitter, python.reticulate = FALSE, eval = FALSE}
 
 """ The input file has four columns, this script takes writes columns 2 and 3 (barcode and individual) to a new file based on the value of column 4."""
 
@@ -69,7 +86,7 @@ with open('/Users/ddayan/Science/plasticity/analysis/bioinformatics/metadata/mas
 
 oops, only meant to keep columns 2 and 3 and need to write to tab delimited file
 
-```{bash}
+```{bash, eval = FALSE}
 
 for i in ./*csv
 do
@@ -86,8 +103,8 @@ done
 ```
 
 
-##### Popmaps
-### process radtags
+### Popmaps
+## process radtags
 
 Process radtags ran with the following options:
 -P paired
@@ -99,7 +116,7 @@ Process radtags ran with the following options:
 
 example slurm script for process radtags, ran individually for all lanes using sbatch in directory plastic/stacks/cleaned
 
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set the number of nodes
@@ -128,7 +145,7 @@ source /opt/stacks-2.3/bin/source_me
 ```
 
 same using a job array
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set the number of nodes
@@ -160,7 +177,7 @@ source /opt/stacks-2.3/bin/source_me
 ```
 
 after process_radtags the four sets of reads (forward reverse and forward and reverse remainder reads) can be concatenated into a single file, however if using gstacks in the paired end mode these reads will not be included so it can be skipped for PE analysis
-```{bash}
+```{bash, eval = FALSE}
 For those of you that are looking for a quick way to concatenate your samples, you could try this:
 
 Suppose you have a text file named "indiv" that has the names if your samples, and your FASTQ files are in a directory named "samples":
@@ -180,14 +197,14 @@ $ for i in `awk '{print $1}' pops`; do cat samples/$i* > samples_concat/$i.fq.gz
 
 ```
 
-### alignment
+## alignment
 
 after raw reads go through QC and are demultiplexed and concatenated they are aligned to the genome
 alignment used BWA-mem with default options against the broad_s1 g aculeautus genome downloaded from ensembl
 
 two slurm scripts are below for bwa mem alignments: single lane and batch submission
 
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set max wall-clock time (D-HH:MM:SS)
@@ -618,7 +635,7 @@ done
 ```
 
 for all the files in a directory - does not work yet...
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set max wall-clock time (D-HH:MM:SS)
@@ -650,15 +667,13 @@ done
 
 ```
 
-
-
 time estimate:
   for single lane 3 hours
   
   
-### gstacks
+## gstacks
 
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set max wall-clock time (D-HH:MM:SS)
@@ -688,10 +703,9 @@ source /opt/stacks-2.3/bin/source_me
 ```
 
 
-### populations
+## populations
 
-
-```{bash}
+```{bash, eval = FALSE}
 #!/bin/bash
 
 # set max wall-clock time (D-HH:MM:SS)
@@ -721,4 +735,79 @@ source /opt/stacks-2.3/bin/source_me
 
 
 ```
+
+
+
+# Initial Coverage Analysis
+
+Rationale: Ran the pipeline above for subset of libraries (68, 2-7, 9-12 - logged with "12-8" prefix). Then used this subset of the data (~15% of data and ~100 fish from each population) to examine coverage and decide on filtering parameters for the final run
+
+## gstacks log
+
+### bamstats
+first we look at coverage of the data going into stacks, the bam files
+
+pulled up the bamstats from log output of gstacks ("gstacks.log.distribs"), then edited file with regex include a population flag
+
+```{r, warning=FALSE, message=FALSE}
+bamstats <- read_tsv("log_files/12-8_run/12-8bamstats.txt")
+ggplot(data = bamstats)+geom_density(aes(x=primary_kept))+geom_vline(aes(xintercept = median(bamstats$primary_kept)), color = "red")
+bamstats %>%
+  group_by(pop) %>%
+  summarise(median_forward_reads = median(primary_kept), mean_kept = mean(kept_frac) )
+```
+
+Here we see no issue with variation in mapping quality across the populations and good evidence that we got more than the number of reads we were looking for per individual. ~13 million total reads per samples (or 7.5million pairs), which if we have about 350k rad loci works out to about 20x coverage before filtering sites (but after filtering for bad reads in the process_radtags fork). 
+
+We lost about 20% of the reads in the bam files to default quality filters in the gstacks fork (minmapq 10, max-clipped 0.20, unmapped reads) summary below:
+
+>Read 6556590170 BAM records:  
+  kept 5322753707 primary alignments (83.4%), of which 2628057004 reverse reads  
+  skipped 423599169 primary alignments with insufficient mapping qualities (6.6%)  
+  skipped 455204465 excessively soft-clipped primary alignments (7.1%)  
+  skipped 179611285 unmapped reads (2.8%)  
+  skipped some suboptimal (secondary/supplementary) alignment records  
+
+At this point the expected coverage is ~ 17x (2433922417 paired reads per 395 samples (about 6 million reads per sample) per estimated 350k rad loci)
+
+### Raw Genotypes Coverage
+
+similar to above we pulled the distribution of effective coverage from the stacks logs, edited to include a population flag and examined below
+
+First, the summary output from gstacks.log:
+
+>Built 1000251 loci comprising 2694696703 forward reads and 2433922417 matching paired-end reads; mean insert length was 244.1 (sd: 75.2).  
+Removed 260774286 unpaired (forward) reads (9.7%); kept 2433922417 read pairs in 962035 loci.  
+Removed 796945198 read pairs whose insert length had already been seen in the same sample as putative PCR duplicates (32.7%); kept 1636977219 read pairs.  
+
+>Genotyped 962035 loci:  
+  effective per-sample coverage: mean=9.4x, stdev=5.1x, min=1.0x, max=36.9x  
+  mean number of sites per locus: 523.7  
+  a consistent phasing was found for 36695500 of out 38359065 (95.7%) diploid loci needing phasing  
+  
+Quick summary: 33% PCR duplicates + vastly more rad loci than expected leads to drastic reduction in coverage... but lets look more closely
+
+```{r, warnings=FALSE, messages=FALSE }
+eff_cov <- read_tsv("log_files/12-8_run/effective_cov_12-8.txt")
+a <- ggplot(data=eff_cov)+geom_density(aes(x= n_loci))+geom_vline(aes(xintercept=median(eff_cov$n_loci)), color = "red")+ggtitle("Number of Rad Loci")
+b <- ggplot(data=eff_cov)+geom_density(aes(x= mean_cov_ns))+geom_vline(aes(xintercept=median(eff_cov$mean_cov_ns)), color = "red")+ggtitle("weighted mean coverage")
+c <- ggplot(data=eff_cov)+geom_density(aes(x= pcr_dupl_rate))+geom_vline(aes(xintercept=median(eff_cov$pcr_dupl_rate)), color = "red")+ggtitle("pcr duplicates")
+d <- ggplot(data = eff_cov)+geom_point(aes(pcr_dupl_rate, mean_cov_ns), alpha = 0.1) +geom_smooth(aes(pcr_dupl_rate, mean_cov_ns), method = "lm") 
+plot_grid(a,b,c,d)
+rm(a,b,c,d)
+
+```
+
+At this point, things are not looking great, about 50% of samples have less than 10x effective coverage, and this seems largely to be caused by (1) a great increase in the number of rad loci realtive to what was expected given other papers numbers for the number of PstI cut sites and my own in silico digest and (2) PCR duplicates take up anywhere from ~18% to 60% of the reads depending on the library (it's clear that the variation in pcr duplication rate is explained by variation at the level of library prep given the clustering in the last plot above). 
+
+quick note: a previous examination of PCR duplication reveals that only 0.6% of duplicates appear to be optical duplicates, suggesting that library complexity is the root issue here, not sequencing. 
+
+The good news:  
+if there are actually >500k PstI cut sites in the stickleback genome, than we have more sites than we need to effectively cover the whole genome. In the worst case from the literature (Roesti et al 2015), LD decays at 1kb, 
+
+### populations
+
+after looking at BAMstats and the effective coverage we look at the coverage of data only filtered by populations fork of stacks (-r 0.95 i.e. only retain variable sites if rad locus is covered in in 95% of sample within a population)
+
+
 

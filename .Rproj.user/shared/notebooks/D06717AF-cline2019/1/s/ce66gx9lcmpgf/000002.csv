@@ -1,0 +1,27 @@
+"0","#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=bwa_default
+
+# set name of output file
+#SBATCH --output=bwadefault.out
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/samtools-1.6/source_me
+source /opt/samtools-1.6/source_me
+
+for i in `find ../cleaned_tags/ -name '*.gz'`
+do
+/opt/bio-bwa/bwa mem -t 38 ../genome/f_het_genome_3.0.2.fa.gz ../cleaned/${i} ../cleaned/${i} | /opt/samtools-1.6/bin/samtools view -@ 16 -bSu - | /opt/samtools-1.6/bin/samtools sort -@ 16 - -o ./${i:0:-6}.$
+
+done"
