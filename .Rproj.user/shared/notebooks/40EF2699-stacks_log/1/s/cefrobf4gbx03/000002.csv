@@ -1,0 +1,30 @@
+"0","```bash
+#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of output file
+#SBATCH --output=library_%a_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+#set the array
+#SBATCH --array=9,10,11,12 
+
+# set name of job
+#SBATCH --job-name=library_%a_process_radtags
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/process_radtags -P  -p ../../seq_data/run2/pls-${SLURM_ARRAY_TASK_ID} -b ../info/library_${SLURM_ARRAY_TASK_ID}_barcodes.txt -o ./ -e pstI --inline-null -c -q -r --adapter-1 GATCGGAAGAGCGGTTCAGCAGGAATGCCGAGACCGATCAGAACAA --adapter-2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCAT --adapter_mm 2 &> pr_library_${SLURM_ARRAY_TASK_ID}.oe
+```"

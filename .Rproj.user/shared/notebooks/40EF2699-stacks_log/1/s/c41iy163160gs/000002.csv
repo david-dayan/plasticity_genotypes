@@ -1,0 +1,30 @@
+"0","```bash
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=popfiltfirst12-8
+
+# set name of output file
+#SBATCH --output=popfiltfirst12-8.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/populations --in-path ./ -M ../info/popmap_first12-8.txt -t 38 -r 0.95  --vcf --merge_sites -e pstI &> lane8_popfilt.oe
+
+
+
+
+```"

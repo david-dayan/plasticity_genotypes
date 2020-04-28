@@ -1,0 +1,19 @@
+"0","```bash
+For those of you that are looking for a quick way to concatenate your samples, you could try this:
+
+Suppose you have a text file named \"indiv\" that has the names if your samples, and your FASTQ files are in a directory named \"samples\":
+
+$ ls
+indiv  samples
+$ mkdir samples_concat
+for i in `cat indiv`; do cat samples/$i* > samples_concat/$i.fq.gz; done
+
+Or, if you already have your population assignment file 'pops':
+
+$ ls
+pops  samples
+$ mkdir samples_concat
+$ for i in `awk '{print $1}' pops`; do cat samples/$i* > samples_concat/$i.fq.gz; done
+
+
+```"

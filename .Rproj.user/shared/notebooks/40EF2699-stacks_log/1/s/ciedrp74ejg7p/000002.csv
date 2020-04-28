@@ -1,0 +1,8 @@
+"0","```bash
+for f in *.fastq.gz; do
+    name=`echo \"$f\"|sed 's/_R[12]_001.fastq.gz//'`
+    dir=\"$name\"
+    mkdir -p \"$dir\"
+    mv \"$f\" \"$dir\"
+done
+```"
