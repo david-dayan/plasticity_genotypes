@@ -1,0 +1,18 @@
+"0","eff_cov <- read_tsv(""log_files/12-8_run/effective_cov_12-8.txt"")"
+"2","Parsed with column specification:
+cols(
+  sample = [31mcol_character()[39m,
+  n_loci = [32mcol_double()[39m,
+  n_used_fw_reads = [32mcol_double()[39m,
+  mean_cov = [32mcol_double()[39m,
+  mean_cov_ns = [32mcol_double()[39m,
+  n_unpaired_reads = [32mcol_double()[39m,
+  n_pcr_dupl_pairs = [32mcol_double()[39m,
+  pcr_dupl_rate = [32mcol_double()[39m
+)
+"
+"0","a <- ggplot(data=eff_cov)+geom_density(aes(x= n_loci))+geom_vline(aes(xintercept=median(eff_cov$n_loci)), color = ""red"")+ggtitle(""Number of Rad Loci"")"
+"0","b <- ggplot(data=eff_cov)+geom_density(aes(x= mean_cov_ns))+geom_vline(aes(xintercept=median(eff_cov$mean_cov_ns)), color = ""red"")+ggtitle(""weighted mean coverage"")"
+"0","c <- ggplot(data=eff_cov)+geom_density(aes(x= pcr_dupl_rate))+geom_vline(aes(xintercept=median(eff_cov$pcr_dupl_rate)), color = ""red"")+ggtitle(""pcr duplicates"")"
+"0","d <- ggplot(data = eff_cov)+geom_point(aes(pcr_dupl_rate, mean_cov_ns), alpha = 0.1) +geom_smooth(aes(pcr_dupl_rate, mean_cov_ns), method = ""lm"") "
+"0","plot_grid(a,b,c,d)"

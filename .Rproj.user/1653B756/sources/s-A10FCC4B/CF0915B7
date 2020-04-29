@@ -5,18 +5,18 @@
     "dirty" : false,
     "encoding" : "UTF-8",
     "folds" : "637|23|667|0|\n",
-    "hash" : "2838243114",
+    "hash" : "1269194738",
     "id" : "CF0915B7",
-    "lastKnownWriteTime" : 1588051516,
-    "last_content_update" : 1588051516732,
+    "lastKnownWriteTime" : 1588124245,
+    "last_content_update" : 1588124245980,
     "path" : "~/Science/plasticity/analysis/bioinformatics/plasticity_genotypes/stacks_log.Rmd",
     "project_path" : "stacks_log.Rmd",
     "properties" : {
         "chunk_output_type" : "inline",
-        "cursorPosition" : "805,223",
+        "cursorPosition" : "916,0",
         "docOutlineSize" : "127",
         "docOutlineVisible" : "1",
-        "scrollLine" : "799"
+        "scrollLine" : "902"
     },
     "read_only" : false,
     "read_only_alternatives" : [

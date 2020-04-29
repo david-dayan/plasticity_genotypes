@@ -803,11 +803,115 @@ At this point, things are not looking great, about 50% of samples have less than
 quick note: a previous examination of PCR duplication reveals that only 0.6% of duplicates appear to be optical duplicates, suggesting that library complexity is the root issue here, not sequencing. 
 
 The good news:  
-if there are actually >500k PstI cut sites in the stickleback genome, than we have more sites than we need to effectively cover the whole genome. In the worst case from the literature (Roesti et al 2015), LD decays at 1kb, 
+if there are actually >500k PstI cut sites in the stickleback genome, than we have more sites than we need to effectively cover the whole genome - In the worst case from the literature (Roesti et al 2015), LD decays at 1kb, and the stickleback genome is 447mb, so achieving full genomewide coverage requires 450k radloci (IN THE WORST POSSIBLE CASE), therefore we can probably lose some of the poorly sequenced sites and individuals to improve depth and still have markers that cover the entire genome! 
+
+To look at things at this level we will have to examine coverage per site per individual, instead of these summary statistics, this is below
+
 
 ### populations
 
-after looking at BAMstats and the effective coverage we look at the coverage of data only filtered by populations fork of stacks (-r 0.95 i.e. only retain variable sites if rad locus is covered in in 95% of sample within a population)
+after looking at BAMstats and the effective coverage summary stats from gstacks, we look at the coverage of data only filtered by populations fork of stacks (-r 0.95 i.e. only retain variable sites if rad locus is covered in in 95% of sample within a population)
 
+#### r 0.95
+
+How many of the rad loci are "bad" (i.e. absent int >5% of samples within a population)?  
+>Removed 653042 loci that did not pass sample/population constraints from 962035 loci.  
+Kept 308993 loci, composed of 248618752 sites; 2268754 of those sites were filtered, 838333 variant sites remained.  
+221216030 genomic sites, of which 26716049 were covered by multiple loci (12.1%).
+Mean genotyped sites per locus: 795.32bp (stderr 0.28).  
+
+How does coverage look now?
+
+```{bash, eval=FALSE}
+#first capture the depth per locus per individual using vcftools
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/populations.snps.vcf --depth --site-depth --site-mean-depth --geno-depth 
+```
+
+```{bash, eval=FALSE}
+#then randomly sample this geno-depth output to a reasonable size for plotting (50k snps)
+shuf -n 10000 out.gdepth > gdepth_10k
+( sed 1q out.gdepth; sed 1d gdepth_10k ) > gdepth_10k.txt 
+```
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+gdepths <- read_tsv("log_files/12-8_run/gdepth_10k.txt")
+idepth <- read_tsv("log_files/12-8_run/out.idepth")
+ldepthmean <- read_tsv("log_files/12-8_run/out.ldepth.mean")
+gs <- as.data.frame(unlist(gdepths[c(3:397)]))
+colnames(gs) <- "depth"
+
+a <- ggplot(data=idepth)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus per Individual")
+b <- ggplot(data=ldepthmean)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus")+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+c <- ggplot()+geom_density(aes(x=gs$depth))+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+xlim(0,50)
+
+plot_grid(a,b,c)
+```
+
+Something not good is going on here, when we look at the SNP level more than 50% of the sites have > ~12x coverage, suggesting some coverage based filtering could produce a sizeable snp dataset to conduct our analyses on, but when we look at the SNPxIndividual level we see that many SNPs have 0 depth. Let's look more closely...
+
+```{r, cache }
+#lets make a clustered heatmap of coverage split across populations
+
+smallgs <- sample_n(gdepths, 1000)
+# smallgs$ID <- seq.int(nrow(smallgs))
+# 
+# 
+# long_gs <- gather(gdepths, individual, depth, bb_f_10:rs_s_87)
+# long_gs <- long_gs[complete.cases(long_gs),]
+# 
+# small_long_gs <- gather(smallgs, individual, depth, bb_f_10:rs_s_87)
+# small_long_gs <- small_long_gs[complete.cases(small_long_gs),]
+# samples <- sample(colnames(gdepths[,3:397]), 40)
+# small_long_gs <- subset(small_long_gs, individual %in% samples)
+# small_long_gs$pop <- substr(small_long_gs$individual, start=1, stop = 2)
+# 
+# #now lets reorder the rows according to clustering
+# hc <- hclust(dist(as.matrix(small_long_gs[,c("depth", "ID", "individual")])))
+# ord <- order.dendrogram(as.dendrogram(hc))
+# small_long_gs$ID <- factor(x = small_long_gs$ID, levels = unique(small_long_gs$ID[ord]), ordered = TRUE)
+# 
+# 
+# ggplot(data=small_long_gs)+geom_tile(aes(x=individual,y=ID, fill=depth, group = pop))+scale_x_discrete(expand=c(0,0))+scale_y_discrete(expand=c(0,0))+scale_fill_viridis_c()+facet_grid(. ~ pop, scales = "free")
+
+#all that was very nice, but it turns out theres a great package that will do a better job of that
+require(heatmaply)
+samples <- sample(colnames(gdepths[,3:397]), 200)
+smallergs <- smallgs[,samples]
+smallergs <- t(smallergs)
+smallergs <- smallergs[order(row.names(smallergs)),]
+smallergs <- t(smallergs)
+heatmaply(smallergs, Colv=FALSE, col_side_colors = substr(colnames(smallergs),start=1, stop = 2), titleX = FALSE, titleY=FALSE)
+
+```
+
+The plot above is a heatmap of depth with SNPs on the y axis and individuals (grouped by population (BB, CL, LB, RS)) on the x axis for a random subset of 200 individuals and 1000 snps  
+* Few SNPs have good coverage across all populations
+* BB is missing many rad loci, but coverage is good where a locus is retained  
+* RS is also looking rough  
+* Good overlap between CL and LB relative to RS and LB, which is odd because LB is recently diverged from RS  
+
+Questions: 
+(1) does coverage overall vary between populations?  
+(2) Is zero coverage due to the r 0.95 filter, and if so, does it make more sense to filter dataset-wide rather than population-wise because this will lead to population level structure in missing data?  
+(3) alternatively, are these rad loci not present some populations (i.e. allele dropout), this seems like a LOT of cut site loss, and the fact that LB and RS are not more similar doesn't fit with this idea  
+
+Rather than spend time going down this road, lets run populations again with no population wise filtering and see what we get.
 
 
