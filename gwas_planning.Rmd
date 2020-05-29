@@ -1,0 +1,40 @@
+---
+title: "GWAS Planning"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+---
+
+# Summary
+
+# Genomic Data Preparation
+
+Different GWAS methods have different requirements for input data, that should be accounted for when generating the input datasets. Here we overview the requirements and plan the final genotype table
+
+## RandomForest
+
+Random Forest requires predictor datasets with:  
+
+(a) no missing data  
+(b) no correlated predictors  
+(c) no combining predictors with differing variances (i.e. population id & SNPs)  
+
+So we need to structure and filter the predictor dataset to comply with these requirements while finding a way to account for covariates such as population structure and any significant covariates from the lab (e.g. library prep, time of day, sex, tank density, body size) 
+
+### missing data
+
+imputation and filtering
+
+### correlated predictors
+
+using haplotypes, ld pruning
+
+### dealing with covariates
+
+BLUPs (Zhao 2012 / Holliday 2012 / Waters 2018), mixed random forest (Stephan 2015), covariance eigenvectors (Azevedo 2017)
+
+The Zhao method is implemented in the randomforest tutorial by brieuc (doi:10.5061/dryad.k55hh8f)

@@ -1,0 +1,48 @@
+gstacks v2.3, executed 2020-05-18 14:00:15
+/opt/stacks/2.3/bin/gstacks -I ../alignments/ -M ../info/../info/pop_map.txt --rm-pcr-duplicates -O ./ -t 10
+Locus/sample distributions will be written to './gstacks.log.distribs'.
+
+Configuration for this run:
+  Input mode: reference-based
+  Population map: '../info/../info/pop_map.txt'
+  Input files: 2279, e.g. '../alignments/rs_f_10.bam'
+  Output to: './'
+  Model: marukilow (var_alpha: 0.01, gt_alpha: 0.05)
+  Discarding unpaired reads.
+  Removing PCR duplicates.
+
+Reading BAM headers...
+Processing all loci...
+1K...
+2K...
+5K...
+10K...
+20K...
+50K...
+100K...
+200K...
+500K...
+1000K...
+done.
+
+Read 38505561773 BAM records:
+  kept 31589809638 primary alignments (83.9%), of which 15560702018 reverse reads
+  skipped 2472966745 primary alignments with insufficient mapping qualities (6.6%)
+  skipped 2433081192 excessively soft-clipped primary alignments (6.5%)
+  skipped 1149879071 unmapped reads (3.1%)
+  skipped some suboptimal (secondary/supplementary) alignment records
+
+  Per-sample stats (details in 'gstacks.log.distribs'):
+    read 16895814.7 records/sample (646-70470513)
+    kept 10.4%-85.9% of these
+
+Built 1922504 loci comprising 16029107620 forward reads and 14566108785 matching paired-end reads; mean insert length was 249.4 (sd: 78.2).
+Removed 1462998835 unpaired (forward) reads (9.1%); kept 14566108785 read pairs in 1788198 loci.
+Removed 3758113517 read pairs whose insert length had already been seen in the same sample as putative PCR duplicates (25.8%); kept 10807995268 read pairs.
+
+Genotyped 1788198 loci:
+  effective per-sample coverage: mean=11.8x, stdev=5.8x, min=1.0x, max=40.1x
+  mean number of sites per locus: 437.7
+  a consistent phasing was found for 229618780 of out 241108686 (95.2%) diploid loci needing phasing
+
+gstacks is done.

@@ -1,0 +1,1681 @@
+---
+title: "Stacks Log 0.1"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+---
+
+# Summary
+
+Does cryptic genetic variation contribute to the adaptive divergence of freshwater populations of threespine stickleback? Let's get that genomic data to start figuring it out.
+
+This log describes the initial exploratory data analysis from a subset of the libraries in the plasticity project. 
+
+```{r, warning=FALSE, message=FALSE}
+# prep the environment
+require(tidyverse)
+theme_set(theme_classic())
+require(vcfR)
+require(whoa)
+require(cowplot)
+```
+
+
+__Conclusion__
+Using standard filtering + coverage (gt depth >5 and mean site depth > 10), missingessness filtering (iterative up to geno >95% and individual up to 50% missing data), and paralog filtering (high coverage, allele balance), resulted ~150k rad loci with mean coverage ~14x and heterozygote miscall rate of about 2% (Ho vs He)
+
+Note: some files from this analysis have been deleted from the github repo, so this notebook will not run and should be viewed as the rendered html notebook
+
+# Server Directory
+
+plastic #top directory
+	seq_data #all sequencing data
+	stacks #all input (except raw sequence data) and output of stacks
+		info #all pop_maps
+		alignments #all alignments (sorted bam  files output from bowtie2)
+		genome #bowtie indices and reference genome
+		genotypes #output of gstacks and populations
+		slurm #all stacks slurm jobs
+		cleaned #cleaned radtags
+		
+### seqdata
+for processradtags each set of PE data needs to be in its own directory, write shell script to accomplish this
+
+
+```{bash, eval = FALSE}
+for f in *.fastq.gz; do
+    name=`echo "$f"|sed 's/_R[12]_001.fastq.gz//'`
+    dir="$name"
+    mkdir -p "$dir"
+    mv "$f" "$dir"
+done
+```
+
+
+# Stacks Run 0.1
+
+## Fish metadata
+### Barcodes
+
+Used a python script to split the file 'master_barcode_key.txt' into separate files for each lane.
+
+```{python barcode_splitter, python.reticulate = FALSE, eval = FALSE}
+
+""" The input file has four columns, this script takes writes columns 2 and 3 (barcode and individual) to a new file based on the value of column 4."""
+
+import csv
+
+with open('/Users/ddayan/Science/plasticity/analysis/bioinformatics/metadata/master_barcode_key.csv') as fin:    
+    csvin = csv.DictReader(fin)
+    # Category -> open file lookup
+    outputs = {}
+    for row in csvin:
+        cat = row['library']
+        # Open a new file and write the header
+        if cat not in outputs:
+            fout = open('{}.csv'.format(cat), 'w')
+            dw = csv.DictWriter(fout, fieldnames=csvin.fieldnames)
+            dw.writeheader()
+            outputs[cat] = fout, dw
+        # Always write the row
+        outputs[cat][1].writerow(row)
+    # Close all the files
+    for fout, _ in outputs.values():
+        fout.close()
+
+```
+
+oops, only meant to keep columns 2 and 3 and need to write to tab delimited file
+
+```{bash, eval = FALSE}
+
+for i in ./*csv
+do
+  cut -d "," -f 2,3 $i > ${i%.csv}.tmp
+done
+
+
+for i in ./*tmp
+do
+    tr "," "\\t" < $i > ${i%.tmp}_barcodes.txt
+done
+
+
+```
+
+
+### Popmaps
+
+## process radtags
+
+Process radtags ran with the following options:  
+-P paired  
+-c remove any read with an uncalled base  
+-q remove any read with low quality  
+-r rescue barcodes  
+
+
+example slurm script for process radtags, ran individually for all lanes using sbatch in directory plastic/stacks/cleaned
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=day-long-gpu
+
+# set name of job
+#SBATCH --job-name=library_4_process_radtags
+
+# set name of output file
+#SBATCH --output=library_4_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/process_radtags -P  -p ../../seq_data/run2/pls-4 -b ../info/library_4_barcodes.txt -o ./ -e pstI --inline-null -c -q -r --adapter-1 GATCGGAAGAGCGGTTCAGCAGGAATGCCGAGACCGATCAGAACAA --adapter-2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCAT --adapter_mm 2 &> pr_library_4.oe
+```
+
+same using a job array
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of output file
+#SBATCH --output=library_%a_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+#set the array
+#SBATCH --array=9,10,11,12 
+
+# set name of job
+#SBATCH --job-name=library_%a_process_radtags
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/process_radtags -P  -p ../../seq_data/run2/pls-${SLURM_ARRAY_TASK_ID} -b ../info/library_${SLURM_ARRAY_TASK_ID}_barcodes.txt -o ./ -e pstI --inline-null -c -q -r --adapter-1 GATCGGAAGAGCGGTTCAGCAGGAATGCCGAGACCGATCAGAACAA --adapter-2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCAT --adapter_mm 2 &> pr_library_${SLURM_ARRAY_TASK_ID}.oe
+```
+
+after process_radtags the four sets of reads (forward reverse and forward and reverse remainder reads) can be concatenated into a single file, however if using gstacks in the paired end mode these reads will not be included so it can be skipped for PE analysis
+```{bash, eval = FALSE}
+For those of you that are looking for a quick way to concatenate your samples, you could try this:
+
+Suppose you have a text file named "indiv" that has the names if your samples, and your FASTQ files are in a directory named "samples":
+
+$ ls
+indiv  samples
+$ mkdir samples_concat
+for i in `cat indiv`; do cat samples/$i* > samples_concat/$i.fq.gz; done
+
+Or, if you already have your population assignment file 'pops':
+
+$ ls
+pops  samples
+$ mkdir samples_concat
+$ for i in `awk '{print $1}' pops`; do cat samples/$i* > samples_concat/$i.fq.gz; done
+
+
+```
+
+## alignment
+
+after raw reads go through QC and are demultiplexed and concatenated they are aligned to the genome
+alignment used BWA-mem with default options against the broad_s1 g aculeautus genome downloaded from ensembl
+
+two slurm scripts are below for bwa mem alignments: single lane and batch submission
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=bwa_default
+
+# set name of output file
+#SBATCH --output=bwadefault.out
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/samtools-1.6/source_me
+files="bb_f_10
+bb_f_110
+bb_f_119
+bb_f_121
+bb_f_129
+bb_f_131
+bb_f_157
+bb_f_161
+bb_f_165
+bb_f_168
+bb_f_170
+bb_f_174
+bb_f_181
+bb_f_183
+bb_f_186
+bb_f_189
+bb_f_19
+bb_f_191
+bb_f_193
+bb_f_20
+bb_f_213
+bb_f_218
+bb_f_221
+bb_f_231
+bb_f_236
+bb_f_237
+bb_f_239
+bb_f_24
+bb_f_282
+bb_f_288
+bb_f_316
+bb_f_320
+bb_f_4
+bb_f_41
+bb_f_43
+bb_f_46
+bb_f_5
+bb_f_56
+bb_f_66
+bb_f_82
+bb_f_99
+bb_s_1
+bb_s_104
+bb_s_108
+bb_s_114
+bb_s_116
+bb_s_126
+bb_s_13
+bb_s_133
+bb_s_135
+bb_s_141
+bb_s_143
+bb_s_151
+bb_s_153
+bb_s_159
+bb_s_167
+bb_s_170
+bb_s_172
+bb_s_175
+bb_s_18
+bb_s_185
+bb_s_193
+bb_s_20
+bb_s_204
+bb_s_205
+bb_s_206
+bb_s_207
+bb_s_209
+bb_s_210
+bb_s_216
+bb_s_220
+bb_s_225
+bb_s_237
+bb_s_241
+bb_s_246
+bb_s_250
+bb_s_256
+bb_s_262
+bb_s_273
+bb_s_277
+bb_s_283
+bb_s_284
+bb_s_287
+bb_s_292
+bb_s_300
+bb_s_311
+bb_s_314
+bb_s_321
+bb_s_45
+bb_s_68
+bb_s_75
+bb_s_77
+bb_s_81
+bb_s_86
+bb_s_89
+cl_f_119
+cl_f_12
+cl_f_121
+cl_f_126
+cl_f_139
+cl_f_141
+cl_f_142
+cl_f_146
+cl_f_148
+cl_f_154
+cl_f_155
+cl_f_159
+cl_f_175
+cl_f_177
+cl_f_187
+cl_f_192
+cl_f_197
+cl_f_20
+cl_f_21
+cl_f_214
+cl_f_226
+cl_f_234
+cl_f_236
+cl_f_25
+cl_f_260
+cl_f_265
+cl_f_269
+cl_f_270
+cl_f_272
+cl_f_276
+cl_f_286
+cl_f_288
+cl_f_296
+cl_f_312
+cl_f_314
+cl_f_34
+cl_f_343
+cl_f_348
+cl_f_38
+cl_f_41
+cl_f_46
+cl_f_52
+cl_f_53
+cl_f_55
+cl_f_56
+cl_f_68
+cl_f_76
+cl_f_79
+cl_f_85
+cl_f_88
+cl_s_104
+cl_s_110
+cl_s_113
+cl_s_115
+cl_s_117
+cl_s_119
+cl_s_129
+cl_s_142
+cl_s_147
+cl_s_148
+cl_s_154
+cl_s_17
+cl_s_179
+cl_s_188
+cl_s_189
+cl_s_19
+cl_s_190
+cl_s_199
+cl_s_20
+cl_s_215
+cl_s_23
+cl_s_234
+cl_s_236
+cl_s_249
+cl_s_257
+cl_s_26
+cl_s_27
+cl_s_284
+cl_s_30
+cl_s_308
+cl_s_310
+cl_s_32
+cl_s_34
+cl_s_35
+cl_s_37
+cl_s_40
+cl_s_43
+cl_s_47
+cl_s_57
+cl_s_58
+cl_s_71
+cl_s_77
+cl_s_8
+cl_s_9
+cl_s_96
+lb_f_100
+lb_f_109
+lb_f_114
+lb_f_119
+lb_f_134
+lb_f_137
+lb_f_142
+lb_f_143
+lb_f_146
+lb_f_150
+lb_f_151
+lb_f_172
+lb_f_178
+lb_f_179
+lb_f_185
+lb_f_191
+lb_f_197
+lb_f_202
+lb_f_206
+lb_f_214
+lb_f_220
+lb_f_226
+lb_f_230
+lb_f_232
+lb_f_237
+lb_f_239
+lb_f_251
+lb_f_253
+lb_f_255
+lb_f_256
+lb_f_275
+lb_f_284
+lb_f_305
+lb_f_49
+lb_f_57
+lb_f_81
+lb_f_91
+lb_f_96
+lb_s_110
+lb_s_125
+lb_s_129
+lb_s_13
+lb_s_135
+lb_s_138
+lb_s_148
+lb_s_151
+lb_s_159
+lb_s_170
+lb_s_171
+lb_s_176
+lb_s_184
+lb_s_19
+lb_s_204
+lb_s_207
+lb_s_21
+lb_s_211
+lb_s_226
+lb_s_231
+lb_s_239
+lb_s_242
+lb_s_245
+lb_s_248
+lb_s_257
+lb_s_269
+lb_s_280
+lb_s_292
+lb_s_295
+lb_s_309
+lb_s_313
+lb_s_38
+lb_s_39
+lb_s_4
+lb_s_41
+lb_s_50
+lb_s_62
+lb_s_63
+lb_s_72
+lb_s_77
+lb_s_80
+lb_s_82
+lb_s_90
+rs_f_10
+rs_f_114
+rs_f_115
+rs_f_120
+rs_f_13
+rs_f_130
+rs_f_135
+rs_f_137
+rs_f_138
+rs_f_144
+rs_f_152
+rs_f_157
+rs_f_158
+rs_f_160
+rs_f_168
+rs_f_178
+rs_f_18
+rs_f_183
+rs_f_185
+rs_f_186
+rs_f_189
+rs_f_203
+rs_f_204
+rs_f_205
+rs_f_210
+rs_f_214
+rs_f_215
+rs_f_217
+rs_f_228
+rs_f_233
+rs_f_236
+rs_f_240
+rs_f_241
+rs_f_257
+rs_f_262
+rs_f_263
+rs_f_270
+rs_f_272
+rs_f_290
+rs_f_31
+rs_f_34
+rs_f_42
+rs_f_45
+rs_f_46
+rs_f_5
+rs_f_53
+rs_f_54
+rs_f_66
+rs_f_79
+rs_f_85
+rs_f_87
+rs_s_10
+rs_s_106
+rs_s_113
+rs_s_118
+rs_s_12
+rs_s_120
+rs_s_125
+rs_s_127
+rs_s_136
+rs_s_140
+rs_s_15
+rs_s_152
+rs_s_164
+rs_s_166
+rs_s_169
+rs_s_170
+rs_s_172
+rs_s_175
+rs_s_178
+rs_s_182
+rs_s_188
+rs_s_196
+rs_s_212
+rs_s_219
+rs_s_223
+rs_s_226
+rs_s_240
+rs_s_242
+rs_s_244
+rs_s_247
+rs_s_250
+rs_s_253
+rs_s_258
+rs_s_267
+rs_s_27
+rs_s_278
+rs_s_283
+rs_s_285
+rs_s_287
+rs_s_290
+rs_s_291
+rs_s_30
+rs_s_302
+rs_s_306
+rs_s_31
+rs_s_316
+rs_s_321
+rs_s_33
+rs_s_331
+rs_s_344
+rs_s_35
+rs_s_353
+rs_s_356
+rs_s_36
+rs_s_360
+rs_s_363
+rs_s_369
+rs_s_371
+rs_s_379
+rs_s_381
+rs_s_383
+rs_s_4
+rs_s_44
+rs_s_64
+rs_s_65
+rs_s_69
+rs_s_73
+rs_s_76
+rs_s_8
+rs_s_83
+rs_s_84
+rs_s_85
+rs_s_87
+"
+
+#
+# Align paired-end data with Bpwtie2, convert to BAM and SORT.
+#
+
+for sample in $files
+do 
+/opt/bio-bwa/bwa mem -t 38 ../genome/bwa_gac ../cleaned/${sample}.1.fq.gz ../cleaned/${sample}.2.fq.gz | /opt/samtools-1.6/bin/samtools view -@ 16 -bSu - | /opt/samtools-1.6/bin/samtools sort -@ 16 - -o ./${sample}.bam &> bwa_mem.oe
+
+done
+
+```
+
+for all the files in a directory - does not work yet...
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=bwa_default
+
+# set name of output file
+#SBATCH --output=bwadefault.out
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/samtools-1.6/source_me
+files=find . -name "*.fq.gz" -exec basename \{} .fq.gz \; | sed 's/\.[12]//' | sed 's/.rem//' | uniq
+
+
+for sample in $files
+do 
+/opt/bio-bwa/bwa mem -t 38 ../genome/bwa/bwa_gac ../cleaned_run2_lane8/${sample}.1.fq.gz ../cleaned_run2_lane8/${sample}.2.fq.gz | /opt/samtools-1.6/bin/samtools view -@ 16 -bSu - | /opt/samtools-1.6/bin/samtools sort -@ 16 - -o ./${sample}.bam &> bwa_mem.oe
+
+done
+
+```
+
+time estimate:
+  for single lane 3 hours
+  
+  
+## gstacks
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=gstacks12-8
+
+# set name of output file
+#SBATCH --output=gstacks12-8.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/gstacks -I ../alignments/ -M ../info/../info/popmap_first12-8.txt --rm-pcr-duplicates -O ./ -t 38 &> gstacks_log_12-8.oe
+
+
+```
+
+
+## populations
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=popfiltfirst12-8
+
+# set name of output file
+#SBATCH --output=popfiltfirst12-8.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks-2.3/bin/source_me
+/opt/stacks-2.3/bin/populations --in-path ./ -M ../info/popmap_first12-8.txt -t 38 -r 0.95  --vcf --merge_sites -e pstI &> lane8_popfilt.oe
+
+
+
+
+```
+
+
+
+## Initial Coverage Analysis
+
+Rationale:  
+Ran the pipeline above for subset of libraries (68, 2-7, 9-12 - logged with "12-8" prefix). Then used this subset of the data (~15% of data and ~100 fish from each population) to examine coverage and decide on filtering parameters for the final run
+
+### gstacks log
+
+#### bamstats
+first we look at coverage of the data going into stacks, the bam files
+
+pulled up the bamstats from log output of gstacks ("gstacks.log.distribs"), then edited file with regex include a population flag
+
+```{r, warning=FALSE, message=FALSE}
+bamstats <- read_tsv("log_files/12-8_run/12-8bamstats.txt")
+ggplot(data = bamstats)+geom_density(aes(x=primary_kept))+geom_vline(aes(xintercept = median(bamstats$primary_kept)), color = "red")+ggtitle("Retained record from BAM input")
+bamstats %>%
+  group_by(pop) %>%
+  summarise(median_forward_reads = median(primary_kept), mean_kept = mean(kept_frac) )
+```
+
+Here we see no issue with variation in mapping quality across the populations and good evidence that we got more than the number of reads we were looking for per individual. ~13 million total reads per samples (or 7.5million pairs), which if we have about 350k rad loci works out to about 20x coverage before filtering sites (but after filtering for bad reads in the process_radtags fork). 
+
+We lost about 20% of the reads in the bam files to default quality filters in the gstacks fork (minmapq 10, max-clipped 0.20, unmapped reads) summary below:
+
+>Read 6556590170 BAM records:  
+  kept 5322753707 primary alignments (83.4%), of which 2628057004 reverse reads  
+  skipped 423599169 primary alignments with insufficient mapping qualities (6.6%)  
+  skipped 455204465 excessively soft-clipped primary alignments (7.1%)  
+  skipped 179611285 unmapped reads (2.8%)  
+  skipped some suboptimal (secondary/supplementary) alignment records  
+
+At this point the expected coverage is ~ 17x (2433922417 paired reads per 395 samples (about 6 million reads per sample) per estimated 350k rad loci)
+
+#### Raw Genotypes Coverage
+
+similar to above we pulled the distribution of effective coverage from the stacks logs, edited to include a population flag and examined below
+
+First, the summary output from gstacks.log:
+
+>Built 1000251 loci comprising 2694696703 forward reads and 2433922417 matching paired-end reads; mean insert length was 244.1 (sd: 75.2).  
+Removed 260774286 unpaired (forward) reads (9.7%); kept 2433922417 read pairs in 962035 loci.  
+Removed 796945198 read pairs whose insert length had already been seen in the same sample as putative PCR duplicates (32.7%); kept 1636977219 read pairs.  
+
+>Genotyped 962035 loci:  
+  effective per-sample coverage: mean=9.4x, stdev=5.1x, min=1.0x, max=36.9x  
+  mean number of sites per locus: 523.7  
+  a consistent phasing was found for 36695500 of out 38359065 (95.7%) diploid loci needing phasing  
+  
+__Quick summary:__ 33% PCR duplicates + vastly more rad loci than expected leads to drastic reduction in coverage... but lets look more closely
+
+```{r, warning=FALSE, message=FALSE }
+eff_cov <- read_tsv("log_files/12-8_run/effective_cov_12-8.txt")
+a <- ggplot(data=eff_cov)+geom_density(aes(x= n_loci))+geom_vline(aes(xintercept=median(eff_cov$n_loci)), color = "red")+ggtitle("Number of Rad Loci")
+b <- ggplot(data=eff_cov)+geom_density(aes(x= mean_cov_ns))+geom_vline(aes(xintercept=median(eff_cov$mean_cov_ns)), color = "red")+ggtitle("weighted mean coverage")
+c <- ggplot(data=eff_cov)+geom_density(aes(x= pcr_dupl_rate))+geom_vline(aes(xintercept=median(eff_cov$pcr_dupl_rate)), color = "red")+ggtitle("pcr duplicates")
+d <- ggplot(data = eff_cov)+geom_point(aes(pcr_dupl_rate, mean_cov_ns), alpha = 0.1) +geom_smooth(aes(pcr_dupl_rate, mean_cov_ns), method = "lm") 
+plot_grid(a,b,c,d)
+rm(a,b,c,d)
+
+```
+
+At this point, things are not looking great, about 50% of samples have less than 10x effective coverage, and this seems largely to be caused by (1) a great increase in the number of rad loci realtive to what was expected given other papers numbers for the number of PstI cut sites and my own in silico digest and (2) PCR duplicates take up anywhere from ~18% to 60% of the reads depending on the library (it's clear that the variation in pcr duplication rate is explained by variation at the level of library prep given the clustering in the last plot above). 
+
+quick note: a previous examination of PCR duplication reveals that only 0.6% of duplicates appear to be optical duplicates, suggesting that library complexity is the root issue here, not sequencing. 
+
+The good news:  
+if there are actually >500k PstI cut sites in the stickleback genome, than we have more sites than we need to effectively cover the whole genome - In the worst case from the literature (Roesti et al 2015), LD decays at 1kb, and the stickleback genome is 447mb, so achieving full genomewide coverage requires 450k radloci (IN THE WORST POSSIBLE CASE), therefore we can probably lose some of the poorly sequenced sites and individuals to improve depth and still have markers that cover the entire genome! 
+
+To look at things at this level we will have to examine coverage per site per individual, instead of these summary statistics, this is below
+
+
+### populations
+
+after looking at BAMstats and the effective coverage summary stats from gstacks, we look at the coverage of data only filtered by populations fork of stacks
+
+#### r0.95
+this section covers the first fun of populations (-r 0.95 i.e. only retain variable sites if rad locus is covered in in 95% of sample within a population)
+
+How many of the rad loci are "bad" (i.e. absent int >5% of samples within a population)?  
+>Removed 653042 loci that did not pass sample/population constraints from 962035 loci.  
+Kept 308993 loci, composed of 248618752 sites; 2268754 of those sites were filtered, 838333 variant sites remained.  
+221216030 genomic sites, of which 26716049 were covered by multiple loci (12.1%).
+Mean genotyped sites per locus: 795.32bp (stderr 0.28).  
+
+How does coverage look now?
+
+```{bash, eval=FALSE}
+#first capture the depth per locus per individual using vcftools
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/populations.snps.vcf --depth 
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/populations.snps.vcf --site-depth 
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/populations.snps.vcf --site-mean-depth 
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/populations.snps.vcf --geno-depth 
+```
+
+```{bash, eval=FALSE}
+#then randomly sample this geno-depth output to a reasonable size for plotting (50k snps)
+shuf -n 10000 out.gdepth > gdepth_10k
+( sed 1q out.gdepth; sed 1d gdepth_10k ) > gdepth_10k.txt 
+```
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+gdepths <- read_tsv("log_files/12-8_run/gdepth_10k.txt")
+idepth <- read_tsv("log_files/12-8_run/out.idepth")
+ldepthmean <- read_tsv("log_files/12-8_run/out.ldepth.mean")
+gs <- as.data.frame(unlist(gdepths[c(3:397)]))
+colnames(gs) <- "depth"
+
+a <- ggplot(data=idepth)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus per Individual")
+b <- ggplot(data=ldepthmean)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus")+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+c <- ggplot()+geom_density(aes(x=gs$depth))+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+xlim(0,50)
+
+plot_grid(a,b,c)
+```
+
+Something not good is going on here, when we look at the SNP level more than 50% of the sites have > ~12x coverage, suggesting some coverage based filtering could produce a sizeable snp dataset to conduct our analyses on, but when we look at the SNPxIndividual level we see that many SNPs have 0 depth. Let's look more closely...
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE }
+#lets make a clustered heatmap of coverage split across populations
+
+smallgs <- sample_n(gdepths, 1000)
+# smallgs$ID <- seq.int(nrow(smallgs))
+# 
+# 
+# long_gs <- gather(gdepths, individual, depth, bb_f_10:rs_s_87)
+# long_gs <- long_gs[complete.cases(long_gs),]
+# 
+# small_long_gs <- gather(smallgs, individual, depth, bb_f_10:rs_s_87)
+# small_long_gs <- small_long_gs[complete.cases(small_long_gs),]
+# samples <- sample(colnames(gdepths[,3:397]), 40)
+# small_long_gs <- subset(small_long_gs, individual %in% samples)
+# small_long_gs$pop <- substr(small_long_gs$individual, start=1, stop = 2)
+# 
+# #now lets reorder the rows according to clustering
+# hc <- hclust(dist(as.matrix(small_long_gs[,c("depth", "ID", "individual")])))
+# ord <- order.dendrogram(as.dendrogram(hc))
+# small_long_gs$ID <- factor(x = small_long_gs$ID, levels = unique(small_long_gs$ID[ord]), ordered = TRUE)
+# 
+# 
+# ggplot(data=small_long_gs)+geom_tile(aes(x=individual,y=ID, fill=depth, group = pop))+scale_x_discrete(expand=c(0,0))+scale_y_discrete(expand=c(0,0))+scale_fill_viridis_c()+facet_grid(. ~ pop, scales = "free")
+
+#all that was very nice, but it turns out theres a great package that will do a better job of that
+require(heatmaply)
+samples <- sample(colnames(gdepths[,3:397]), 200)
+smallergs <- smallgs[,samples]
+smallergs <- t(smallergs)
+smallergs <- smallergs[order(row.names(smallergs)),]
+smallergs <- t(smallergs)
+heatmaply(smallergs, Colv=FALSE, col_side_colors = substr(colnames(smallergs),start=1, stop = 2), titleX = FALSE, titleY=FALSE)
+
+```
+
+The plot above is a heatmap of depth with SNPs on the y axis and individuals (grouped by population (BB, CL, LB, RS)) on the x axis for a random subset of 200 individuals and 1000 snps  
+* Few SNPs have good coverage across all populations
+* BB is missing many rad loci, but coverage is good where a locus is retained  
+* RS is also looking rough  
+* Good overlap between CL and LB relative to RS and LB, which is odd because LB is recently diverged from RS  
+
+Questions: 
+(1) does coverage overall vary between populations?  
+(2) Is zero coverage due to the r 0.95 filter, and if so, does it make more sense to filter dataset-wide rather than population-wise because this will lead to population level structure in missing data?  
+(3) alternatively, are these rad loci not present some populations (i.e. allele dropout), this seems like a LOT of cut site loss, and the fact that LB and RS are not more similar doesn't fit with this idea  
+
+Rather than spend time going down this road, lets run populations again with no population wise filtering and see what we get.
+
+#### R95
+
+This run reatined only rad loci present in 95% of samples (-R 0.95)
+
+ran the same vcftools depth utils and subsampled the big one
+```{r, message=FALSE, warning=FALSE}
+idepth.1 <- read_tsv("log_files/12-8_run/R95/out.idepth")
+ldepthmean.1 <- read_tsv("log_files/12-8_run/R95/out.ldepth.mean")
+gdepths.1 <- read_tsv("log_files/12-8_run/R95/gdepth_1k.txt")
+gs.1 <- as.data.frame(unlist(gdepths.1[c(3:397)]))
+colnames(gs.1) <- "depth"
+
+a <- ggplot(data=idepth.1)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus per Individual")
+b <- ggplot(data=ldepthmean.1)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus")+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+c <- ggplot()+geom_density(aes(x=gs.1$depth))+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+xlim(0,50)+geom_vline(aes(xintercept = median(gs.1$depth)))+ggtitle("Depth per Locus per Individual")
+
+plot_grid(a,b,c)
+
+
+
+```
+
+
+This looks about the same as the r95 run in the first two plots, but the difference becomes apparent when the SNP_X_individuals with zero coverage are filtered away. This is accomplished (see below) by getting rid of 42% of the Rad loci from the first run.
+
+>Removed 782350 loci that did not pass sample/population constraints from 962035 loci.  
+Kept 179685 loci, composed of 153251877 sites; 2037395 of those sites were filtered, 676463 variant sites remained.  
+149138121 genomic sites, of which 4063490 were covered by multiple loci (2.7%).  
+Mean genotyped sites per locus: 844.50bp (stderr 0.31).
+
+Lets see what this looks like in the heat map
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE }
+#lets make a clustered heatmap of coverage split across populations
+
+smallgs <- sample_n(gdepths.1, 500)
+require(heatmaply)
+samples <- sample(colnames(gdepths.1[,3:397]), 200)
+smallergs <- smallgs[,samples]
+smallergs <- t(smallergs)
+smallergs <- smallergs[order(row.names(smallergs)),]
+smallergs <- t(smallergs)
+heatmaply(smallergs, Colv=FALSE, col_side_colors = substr(colnames(smallergs),start=1, stop = 2), titleX = FALSE, titleY=FALSE)
+
+```
+
+Much Better! Let's just check one more time that the coverage and number of retained sites is consistent across populations
+
+```{r}
+idepth.1$pop <- substr(idepth.1$INDV, 1, 2)
+a <- ggplot(data=idepth.1)+geom_violin(aes(pop,MEAN_DEPTH))
+b <- ggplot(data=idepth.1)+geom_violin(aes(pop,N_SITES))
+plot_grid(a,b)
+rm(a,b)
+```
+
+
+### Filtering
+
+starting from scratch, lets do an interative filtering procedure, getting rid of the worst sites, then worst individuals, then do QC based filtering (depth, allele balance, MAS, etc), then check coverage and error rates
+
+__Filtering Protocol Outline__ 
+1. Process Radtags  
+    + keep only paired reads  
+    + remove any read with an uncalled base  
+    + remove any read with low quality  
+2. gstacks  
+    + remove pcr duplicates  
+    + min-mapq: 10  
+    + max-clipped: 0.2  
+    + max insert length: 1000bp  
+    + only good paired reads  
+    + 5% p-value under maruki_low model for SNP calling and %5 for genotying  
+3. Poorly Sequenced Individuals  
+    + remove individuals from popmap with less than (mean - 2sd) number of good reads in bam file    
+4. Low confidence SNPs 1 (prefix: 0.2) 
+    + minDepth (genotype) 5x  
+    + minMeanDepth (SNP) 10x  
+5. Iterative Missingness Filter  
+    + inds with more than 90% missing data  
+    + genotypes with > 50% missing data  
+    + inds with >50% missing  
+    + genotypes with >80% missing  
+6. Paralogues (decide on which of these later)
+    + allele balance (less than 0.2) 
+    + high coverage  (greater than 3x modal coverage)
+
+notes:
+this could be sped up/ code made a lot cleaner if we didn't write the vcf file out for each step (i.e. do it the "right way" by adding filter flags to loci in the master vcf)
+
+#### 3 
+```{r}
+# make the new popmap of good inds
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  write_tsv("./log_files/12-8_run/12-8_good_inds_popmap.txt", col_names = FALSE)
+
+```
+
+then ran populations with no filtering and this popmap which output then follwoing:
+
+>Removed 0 loci that did not pass sample/population constraints from 962035 loci.
+Kept 962035 loci, composed of 515209893 sites; 116 of those sites were filtered, 7350383 variant sites remained.  
+    325605580 genomic sites, of which 141745630 were covered by multiple loci (43.5%).
+Mean genotyped sites per locus: 523.39bp (stderr 0.27).  
+
+7.3 million SNPs across 325 million bp
+
+#### 4 low confidence SNPs
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/no_filt/populations.snps.vcf --minDP 5 --min-meanDP 10 --recode-INFO-all --recode --out 0.2
+```
+
+This step retained 13% of SNPs  
+981005 out of a possible 7350383 Sites
+
+#### 5 iterative missingness filter
+```{bash, eval=FALSE}
+#output missingess
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.2.recode.vcf  --missing-indv
+
+#get inds with >50% missingess
+awk '$5 > 0.9 && NR>1 {print $1}' out.imiss > bad_inds1
+
+```
+
+no inds with >90% missing data
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=iterative_missingness
+
+# set name of output file
+#SBATCH --output=iterative_missingness.out
+
+#filter out bad inds then filter bad genos
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.2.recode.vcf  --remove bad_inds1 --max-missing 0.5 --recode-INFO-all --recode --out 0.3
+
+```
+
+After filtering, kept 980166 out of a possible 981005 Sites
+
+```{bash, eval=FALSE}
+#output missingess
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.3.recode.vcf  --missing-indv
+
+#get inds with >50% missingess
+awk '$5 > 0.5 && NR>1 {print $1}' out.imiss > bad_inds2
+
+```
+
+removed 10 inds (4 bb, 5 lb, 1 rs)
+
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=iterative_missingness
+
+# set name of output file
+#SBATCH --output=iterative_missingness.out
+
+#filter out bad inds then filter bad genos
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.3.recode.vcf  --remove bad_inds2 --max-missing 0.8 --recode-INFO-all --recode --out 0.4
+
+```
+
+After filtering, kept 891407 out of a possible 980166 Sites
+
+How many rad loci?
+
+```{bash, eval=FALSE}
+cut -f 3 0.4.recode.vcf | awk -F : '{print $1}' |  uniq | wc -l 
+```
+
+152973 unique catlog call numbers
+
+__coverage and het miscall rate check__
+
+before we do any filtering to explicitly try to find miscalled hets due to paralogues and other sources of false orthology at an assembled rad locus, lets see what our coverage looks like now and assess the heterozygote miscall rate
+
+```{bash, eval=FALSE}
+#make sample vcf
+head -15 /home/ddayan/plastic/stacks/genotypes/filtering/0.4.recode.vcf > 0.4sampled.vcf
+shuf -n 1000 /home/ddayan/plastic/stacks/genotypes/filtering/0.4.recode.vcf >> 0.4sampled.vcf
+
+```
+
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/0.7.sampled.vcf --depth 
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/0.7.sampled.vcf --geno-depth 
+
+
+```
+
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+gdepths <- read_tsv("log_files/12-8_run/gdepth0.4_1k.txt")
+idepth <- read_tsv("log_files/12-8_run/0.4.idepth")
+gs <- as.data.frame(unlist(gdepths[c(3:370)]))
+colnames(gs) <- "depth"
+
+a <- ggplot(data=idepth)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per site per Individual")+xlim(0,50)
+c <- ggplot()+geom_density(aes(x=gs$depth))+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+xlim(0,80)+ggtitle("Depth Per site per individual")
+
+plot_grid(a,c, ncol = 1)
+```
+
+
+
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+vcf <- read.vcfR(file = "log_files/12-8_run/0.4sampled.vcf")
+
+#now split this into populations to avoid wahlund effect
+vcf_popsub <- function(vcf, pop, in_pop) {
+  ids <- which(pop %in% in_pop)
+  ids <- ids
+  vcf <- vcf[, c(1,ids)]
+
+  return(vcf)
+
+}
+popid <- unlist(substr(colnames(vcf@gt), 1,2))
+vcf_cl <- vcf_popsub(vcf, popid, "cl")
+vcf_bb <- vcf_popsub(vcf, popid, "bb")
+vcf_rs <- vcf_popsub(vcf, popid, "rs")
+# first get compute expected and observed genotype frequencies
+gfreqs_cl <- exp_and_obs_geno_freqs(vcf_cl)
+gfreqs_bb <- exp_and_obs_geno_freqs(vcf_bb)
+gfreqs_rs <- exp_and_obs_geno_freqs(vcf_rs)
+
+# then plot those.  Set max_plot_loci so that all 2000
+# loci will be plotted
+geno_freqs_scatter(gfreqs_cl, max_plot_loci = 1000)
+geno_freqs_scatter(gfreqs_bb, max_plot_loci = 1000)
+geno_freqs_scatter(gfreqs_rs, max_plot_loci = 1000)
+
+#infer het miscall rate
+overall_cl <- infer_m(vcf_cl, minBin = 1e15)
+overall_cl$m_posteriors
+
+overall_bb <- infer_m(vcf_bb, minBin = 1e15)
+overall_bb$m_posteriors
+
+overall_rs <- infer_m(vcf_rs, minBin = 1e15)
+overall_rs$m_posteriors
+
+
+```
+
+whoa, a het zygote miscall rate of ~2%, not bad
+
+
+#### 6 Paralogs
+
+First we remove sites with an unexpected allele balance at heterozygotes using picard and GATK
+
+```{bash, eval=FALSE}
+# to run picard
+/opt/java/openjdk-1.8.0/bin/java -jar /opt/picard/build/libs/picard.jar 
+
+#setting it up as an alias
+picard="/opt/java/openjdk-1.8.0/bin/java -jar /opt/picard/build/libs/picard.jar"
+$picard
+
+#filterVcf - this doesnt work yet used gatk below
+$picard FilterVcf  I=/home/ddayan/plastic/stacks/genotypes/filtering/0.4.recode.vcf O=0.5.vcf MIN_AB=0.1 R=/home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.fa
+
+#but needs a sequence dictionary? 
+/opt/java/openjdk-1.8.0/bin/java -jar /opt/picard-tools-1.119/CreateSequenceDictionary.jar R= /home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.fa O= /home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.dict
+
+#and it needs to be indexed by samtools (samtools faidx)
+
+# ... and it needs to sort the Vcf file itself first ...
+$picard SortVcf \
+      I=/home/ddayan/plastic/stacks/genotypes/filtering/0.4.recode.vcf \
+      SEQUENCE_DICTIONARY=/home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.dict \
+      O=0.4.sorted.vcf
+      
+
+#now anotate the genotypes with the allele balance tag
+GATK="/opt/java/openjdk-1.8.0/bin/java -jar /opt/Gatk/GenomeAnalysisTK.jar "
+$GATK    -R /home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.fa \
+  -V /home/ddayan/plastic/stacks/genotypes/filtering/0.4.sorted.vcf \
+  -T VariantAnnotator \
+  -o /home/ddayan/plastic/stacks/genotypes/filtering/0.4.annotated.vcf \
+  --annotation AlleleBalance \
+  -U ALLOW_SEQ_DICT_INCOMPATIBILITY
+
+#filter 
+$picard FilterVcf  I=/home/ddayan/plastic/stacks/genotypes/filtering/0.4.annotated.vcf O=0.5.vcf MIN_AB=0.2 
+
+```
+
+
+Next we remove the bad sites (AB < 0.2) and calculate the depths at remaining sites
+
+```{bash, eval=FALSE}
+#now that we have filter flags done, we need to remove the bad rows and prepare to finish paralog filtering by calculating the mean site depths 
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.5.vcf --remove-filtered-all --recode-INFO-all --recode --out 0.6
+
+#############################
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=depths
+
+# set name of output file
+#SBATCH --output=depths.out
+
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/filtering/0.6.recode.vcf --site-depth
+
+
+```
+
+After filtering, kept 872741 out of a possible 891407 Sites (AB filter)  
+  
+Here we filter out sites with 2.5x the modal depth (2095 sites)
+```{r, message=FALSE, warning=FALSE}
+ldepth0.6 <- read_tsv("log_files/12-8_run/0.6.ldepth")
+
+getMode <- function(x) {
+keys <- unique(x)
+keys[which.max(tabulate(match(x, keys)))]
+}
+
+
+ggplot()+geom_density(data=ldepth0.6, aes(SUM_DEPTH)) +geom_vline(aes(xintercept=(2.5*getMode(ldepth0.6$SUM_DEPTH))), color = "red") +geom_vline(aes(xintercept=(getMode(ldepth0.6$SUM_DEPTH))), color = "blue") 
+
+tmp <- ldepth0.6[ldepth0.6$SUM_DEPTH > 2.5*getMode(ldepth0.6$SUM_DEPTH),c(1,2)]
+bad_sites <- tmp %>%
+  unite(col = "id", CHROM, POS, sep = "_")
+write_tsv(bad_sites, "./log_files/12-8_run/bad_sites", col_names = FALSE)
+```
+
+
+```{bash, eval=FALSE}
+#now we'd like to generate a whitelist for the populations module of stacks
+#this should consist of the snps in th 0.6 version of the vcf excluding the "bad_sites" rows 
+#format catalog number \t snp position (from "ID" field)
+
+#create dictionary for converting chrom_pos into stacks catalog ids 
+awk 'NR>1870 {print $3}' 0.6.recode.vcf | awk -F :  'BEGIN{OFS="\t"} {print $1,$2-1}' > stacks_loci
+awk  'BEGIN{OFS="_";}NR>1870 {print $1,$2}' 0.6.recode.vcf > vcf_loci
+paste --delimiters='\t' vcf_loci stacks_loci > catalog_dict
+
+#now remove the bad loci and produce the whitelist
+awk 'BEGIN{OFS="\t"} FNR==NR { a[$1]; next } !($1 in a){print $2,$3}' bad_sites catalog_dict > whitelist.txt
+
+
+```
+
+#### 7 final populations run
+Now that this is all done, run populations using the whitelist
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=38
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=popfiltfirst12-8
+
+# set name of output file
+#SBATCH --output=popfiltfinalfirst12-8.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks/2.3/bin/source_me
+/opt/stacks/2.3/bin/populations --in-path ./ -M ../info/12-8_good_inds_popmap.txt -t 38  --vcf --merge_sites -e pstI  --whitelist ./filtering/whitelist.txt -H -R 0.95 --ordered-export -O ./final_12-8_filt 
+
+```
+
+>Removed 812327 loci that did not pass sample/population constraints from 962035 loci.
+Kept 149708 loci, composed of 131008964 sites; 118603 of those sites were filtered, 738822 variant sites remained.
+    130165888 genomic sites, of which 838483 were covered by multiple loci (0.6%).
+Mean genotyped sites per locus: 867.70bp (stderr 0.27).
+
+>Population summary statistics (more detail in populations.sumstats_summary.tsv):
+  bb: 88.266 samples per locus; pi: 0.057044; all/variant/polymorphic sites: 129901635/738822/317553; private alleles: 68963
+  cl: 92.487 samples per locus; pi: 0.052766; all/variant/polymorphic sites: 129901635/738822/261896; private alleles: 57993
+  lb: 77.921 samples per locus; pi: 0.058716; all/variant/polymorphic sites: 129901635/738822/219889; private alleles: 19711
+  rs: 116.1 samples per locus; pi: 0.061023; all/variant/polymorphic sites: 129901635/738822/560073; private alleles: 281883
+
+So it looks like the final R95 filter removed an additional 131821 SNPs.
+
+Let's do a quick coverage check and decide on if this is dense enough
+## Final coverage check
+
+sampled down to 1000 random sites and ran coverage cehck batch file 
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+gdepths <- read_tsv("log_files/12-8_run/gdepth0.7")
+idepth <- read_tsv("log_files/12-8_run/idepth0.7")
+ldepthmean <- read_tsv("log_files/12-8_run/ldepth.mean0.7")
+gs <- as.data.frame(unlist(gdepths[c(3:370)]))
+colnames(gs) <- "depth"
+
+a <- ggplot(data=idepth)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per site per Individual")+xlim(0,50)
+b <- ggplot(data=ldepthmean)+geom_density(aes(x=MEAN_DEPTH))+geom_vline(aes(xintercept = median(MEAN_DEPTH)))+ggtitle("Mean Depth per Locus")+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+c <- ggplot()+geom_density(aes(x=gs$depth))+scale_x_continuous(breaks = scales::pretty_breaks(n = 10))+xlim(0,80)+ggtitle("Depth Per site per individual")
+
+plot_grid(a,b,c)
+```
+
+het miscall rate:
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+vcf <- read.vcfR(file = "log_files/12-8_run/0.7.sampled.vcf")
+
+#now split this into populations to avoid wahlund effect
+vcf_popsub <- function(vcf, pop, in_pop) {
+  ids <- which(pop %in% in_pop)
+  ids <- ids
+  vcf <- vcf[, c(1,ids)]
+
+  return(vcf)
+
+}
+popid <- unlist(substr(colnames(vcf@gt), 1,2))
+vcf_cl <- vcf_popsub(vcf, popid, "cl")
+vcf_bb <- vcf_popsub(vcf, popid, "bb")
+vcf_rs <- vcf_popsub(vcf, popid, "rs")
+vcf_lb<- vcf_popsub(vcf, popid, "lb")
+# first get compute expected and observed genotype frequencies
+gfreqs_cl <- exp_and_obs_geno_freqs(vcf_cl)
+gfreqs_bb <- exp_and_obs_geno_freqs(vcf_bb)
+gfreqs_rs <- exp_and_obs_geno_freqs(vcf_rs)
+gfreqs_lb <- exp_and_obs_geno_freqs(vcf_lb)
+
+# then plot those.  Set max_plot_loci so that all 2000
+# loci will be plotted
+geno_freqs_scatter(gfreqs_cl, max_plot_loci = 1000)
+geno_freqs_scatter(gfreqs_bb, max_plot_loci = 1000)
+geno_freqs_scatter(gfreqs_rs, max_plot_loci = 1000)
+geno_freqs_scatter(gfreqs_lb, max_plot_loci = 1000)
+
+#infer het miscall rate
+overall_cl <- infer_m(vcf_cl, minBin = 1e15)
+overall_cl$m_posteriors
+
+overall_bb <- infer_m(vcf_bb, minBin = 1e15)
+overall_bb$m_posteriors
+
+overall_rs <- infer_m(vcf_rs, minBin = 1e15)
+overall_rs$m_posteriors
+
+overall_lb <- infer_m(vcf_lb, minBin = 1e15)
+overall_lb$m_posteriors
+```
+
+about a 2% miscall rate for heterozygotes
+
+## Density
+
+The goal of filtering process is to balance genomic density of markers with accuracy of the markers, the filtering doen above appears to be sufficient for finding reliable markers (perhaps favoring bad genotype call to more missing data), but is 149k rad loci of about 800bp each sufficently dense
+
+__steps__  
+* sample vcf down to one one linkage group to make dataset reasonable to work with 
+* filter just to rs fish (likely to have the smallest LD blocks)
+* calculate LD  
+* analyze LD decay rate and estimate effective sampling of genome  
+* power analysis given the coverage
+
+__issues__ 
+* this is likely to overestimate the extent of LD because the sample contains many sibs given the breeding strategy used, not sure if should use non-sibs because sibs will be used in gwas
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=rephase
+
+# set name of output file
+#SBATCH --output=rephase.out
+
+#indicate phasing in the vcf (stacks output is phased, yet the vcf uses the unphased symbols)
+
+sed "s/\\//\|/g" populations.haps.vcf > populations.haps.phased.vcf
+
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=hapld
+
+# set name of output file
+#SBATCH --output=hapld.out
+
+
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/populations.haps.phased.vcf  --chr groupI --hap-r2
+
+
+# note: this didn't work well because the vast majority of haps were not biallelic so ran again on a 2mb portion of groupI
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/populations.snps.vcf  --chr groupI --keep keep_rs --from-bp 1000000 --to-bp 3000000 --geno-r2
+
+
+
+
+```
+
+```{r}
+groupI_LD <- read_tsv("log_files/12-8_run/out.hap.ld")
+groupI_LD$dist <- abs(groupI_LD$POS1 - groupI_LD$POS2)
+ggplot(data=groupI_LD)+geom_point(aes(dist, `R^2`), alpha = 0.1)+geom_smooth(aes(dist, D))
+
+#close LD
+ggplot(data=groupI_LD[groupI_LD$dist<100000,])+geom_point(aes(dist, D), alpha = 0.1)+geom_smooth(aes(dist, D))
+```
+
+
+```{bash, eval = FALSE}
+#grab 1 million rows from this giant file
+head -1 out.geno.ld > r2.sampled
+shuf -n 5000000 out.geno.ld >> r2.sampled
+
+#grab the rows where distance is less than 100kb
+awk '{if ((($2 - $3)<100000) && (($2 - $3)> -100000)) {print $2-$3,$5}} ' out.geno.ld > ldclose
+
+```
+
+
+```{r}
+groupI_LD <- read_tsv("log_files/12-8_run/r2.sampled")
+groupI_LD$dist <- abs(groupI_LD$POS1 - groupI_LD$POS2)
+ggplot(data=groupI_LD)+geom_point(aes(dist, `R^2`), alpha = 0.1)+geom_smooth(aes(dist, `R^2`))
+
+ld_close <- read_delim("log_files/12-8_run/ldclose", delim = " ")
+colnames(ld_close) <- c("dist", "r2")
+ld_close$dist <- abs(ld_close$dist)
+ld_close <- ld_close[complete.cases(ld_close),]
+#close LD
+ggplot(data=ld_close)+geom_point(aes(dist, r2), alpha = 0.1)+geom_smooth(aes(dist, r2))
+
+
+#fitting to ld curve according to hill and weir
+
+library(nlstools)
+distance<-ld_close$dist
+LD.data<-ld_close$r2
+n<-386
+
+HW.st<-c(C=0.1)
+HW.nonlinear<-nls(LD.data~((10+C*distance)/((2+C*distance)*(11+C*distance)))*(1+((3+C*distance)*(12+12*C*distance+(C*distance)^2))/(n*(2+C*distance)*(11+C*distance))),start=HW.st,control=nls.control(maxiter=1000))
+tt<-summary(HW.nonlinear)
+new.rho<-tt$parameters[1]
+fpoints<-((10+new.rho*distance)/((2+new.rho*distance)*(11+new.rho*distance)))*(1+((3+new.rho*distance)*(12+12*new.rho*distance+(new.rho*distance)^2))/(n*(2+new.rho*distance)*(11+new.rho*distance)))
+
+# #confidence intervals
+# pred <- predict(HW.nonlinear)
+# se = summary(HW.nonlinear)$sigma
+# ci = outer(pred, c(outer(se, c(-1,1), '*'))*1.96, '+')
+# ii = order(df$x)
+# 
+# confint2(HW.nonlinear, level = 0.95, method = "asymptotic")
+# ci_lower<-predict(HW.nonlinear, interval = "confidence")[,2]
+# ci_data$lowerfit[enzdata$Enz=="WT"]<-fit1[,2]
+# enzdata$upperfit[enzdata$Enz=="WT"]<-fit1[,3]
+
+ggplot(data=ld_close)+geom_point(aes(dist, r2), alpha = 0.1)+geom_line(aes(dist, fpoints), color="red")+xlim(0,100)
+
+
+
+```
+
+LD is minimal- drops off within a radtag down, after just 10bp
+This suggests that we effectively tag just the portion of the genome covered by retained rad loci. If this is the case then the chance that a causal variant is tagged by our SNP dataset is 
+about 27% (number of rad loci (149k)* average size of rad locus (800bp) / size of genome)-very rough way of estimating this, can probably think of a way to do an actual power analysis
+
+### ngsLD
+
+here we estimate ld a little more formally using ngsLD (not sure what vcftools uses to estimate ld stats)
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=ngsLD_input
+
+# set name of output file
+#SBATCH --output=ngsld_input.out
+
+
+
+/opt/vcftools_0.1.13/vcftools  --vcf /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/populations.snps.vcf --keep keep_rs --012 --out binary.snps
+
+```
+
+```{bash, eval=FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=ngsLD
+
+# set name of output file
+#SBATCH --output=ngsld
+
+#transpose the file
+awk -f ~/bin/awk_transpose.awk binary.snps.012 > binary.snps.012.t
+
+#zipped the input file first
+module load gsl/2.4
+/opt/ngsLD-master/ngsLD --geno /home/ddayan/plastic/stacks/genotypes/final_12-8_filt/binary.snps.012.gz --n_ind 117 --n_sites 738097 --max_kb_dist 10 --n_threads 10 --pos
+
+/home/ddayan/plastic/stacks/genotypes/final_12-8_filt/binary.snps.012.pos --out ./ngsLD_output.txt
+```
+
+
+```{r}
+ngsld <- read_tsv("log_files/12-8_run/ngsLD.sample")
+colnames(ngsld) <- c("dist", "D_prime")
+
+require(nlstools)
+distance<-ngsld[ngsld$dist<1000,]$dist
+LD.data<-1-ngsld[ngsld$dist<1000,]$D_prime
+n<-117
+
+HW.st<-c(C=0.1)
+HW.nonlinear<-nls(LD.data~((10+C*distance)/((2+C*distance)*(11+C*distance)))*(1+((3+C*distance)*(12+12*C*distance+(C*distance)^2))/(n*(2+C*distance)*(11+C*distance))),start=HW.st,control=nls.control(maxiter=1000))
+tt<-summary(HW.nonlinear)
+new.rho<-tt$parameters[1]
+fpoints<-((10+new.rho*distance)/((2+new.rho*distance)*(11+new.rho*distance)))*(1+((3+new.rho*distance)*(12+12*new.rho*distance+(new.rho*distance)^2))/(n*(2+new.rho*distance)*(11+new.rho*distance)))
+
+ggplot(data = ngsld[ngsld$dist<1000,])+geom_point(aes(dist,1-D_prime), alpha = 0.05)+geom_line(aes(dist, fpoints), color ="red")
+
+```
+
+So, yes, LD is very limited, decays to genome wide average within a radtag

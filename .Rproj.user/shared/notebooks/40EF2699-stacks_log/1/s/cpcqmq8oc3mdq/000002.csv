@@ -1,2 +1,0 @@
-"0","bamstats <- read_tsv(""log_files/12-8_run/12-8bamstats.txt"")"
-"0","ggplot(data = bamstats)+geom_density(aes(x=primary_kept))+geom_vline(aes(xintercept = median(bamstats$primary_kept)), color = ""red"")"

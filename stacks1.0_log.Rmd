@@ -1,0 +1,867 @@
+---
+title: "Stacks Log 1.0"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+---
+
+# Summary
+
+Does cryptic genetic variation contribute to the adaptive divergence of freshwater populations of threespine stickleback? Let's get that genomic data to start figuring it out.
+
+This log describes the process from raw reads to genotypes for the full dataset suing filtering and genotype calling parameters previously optimized. See stacks0.1_log for the exploratory data analysis that leads to these parameters.
+
+# Server Directory
+
+plastic #top directory
+	seq_data #all sequencing data
+	stacks #all input (except raw sequence data) and output of stacks
+		info #all pop_maps
+		alignments #all alignments (sorted bam  files output from bowtie2)
+		genome #bowtie indices and reference genome
+		genotypes #output of gstacks and populations
+		slurm #all stacks slurm jobs
+		cleaned #cleaned radtags
+
+## versions
+
+numeric suffixes are used to identify stacks runs and filtering steps for logs and outputs
+
+0.X - Trial run using the final data, but only about 17% of the fish (first twelve lanes excluding lane 8)  
+1.X - Final Run full dataset  
+  1.0 first run through gstacks, no filtering other than gstacks and process radtags
+  1.1 
+
+```{r enviro_prep, warning=FALSE, message=FALSE}
+# prep the environment
+require(tidyverse)
+theme_set(theme_classic())
+require(vcfR)
+require(whoa)
+require(cowplot)
+```
+
+		
+## seqdata
+for processradtags each set of PE data needs to be in its own directory, write shell script to accomplish this
+
+
+```{bash, eval = FALSE}
+for f in *.fastq.gz; do
+    name=`echo "$f"|sed 's/_R[12]_001.fastq.gz//'`
+    dir="$name"
+    mkdir -p "$dir"
+    mv "$f" "$dir"
+done
+```
+
+# Workflow
+
+The scale of the sequencing data (64 lanes) requires working in batches for all steps leading up gstacks (where gstacks should be run on all data simultaneously). The workflow is below:  
+
+(1) Run process_radtags (batches of 8 lanes)  
+(2) Align cleaned reads (fish by fish for 8 lane batch)  
+(3) Delete cleaned reads  
+(4) Run next beatch of libraries (steps 1 to 3)  
+(5) Run gstacks  
+(6) Run populations  
+(7) Filter genotypes  
+
+Workflow is record in the "stacks_checklist" spreadsheet
+
+# Fish metadata
+## Barcodes
+
+Used a python script to split the file 'master_barcode_key.txt' into separate files for each lane.
+
+```{python barcode_splitter, python.reticulate = FALSE, eval = FALSE}
+
+""" The input file has four columns, this script takes writes columns 2 and 3 (barcode and individual) to a new file based on the value of column 4."""
+
+import csv
+
+with open('/Users/ddayan/Science/plasticity/analysis/bioinformatics/metadata/master_barcode_key.csv') as fin:    
+    csvin = csv.DictReader(fin)
+    # Category -> open file lookup
+    outputs = {}
+    for row in csvin:
+        cat = row['library']
+        # Open a new file and write the header
+        if cat not in outputs:
+            fout = open('{}.csv'.format(cat), 'w')
+            dw = csv.DictWriter(fout, fieldnames=csvin.fieldnames)
+            dw.writeheader()
+            outputs[cat] = fout, dw
+        # Always write the row
+        outputs[cat][1].writerow(row)
+    # Close all the files
+    for fout, _ in outputs.values():
+        fout.close()
+
+```
+
+oops, only meant to keep columns 2 and 3 and need to write to tab delimited file
+
+```{bash, eval = FALSE}
+
+for i in ./*csv
+do
+  cut -d "," -f 2,3 $i > ${i%.csv}.tmp
+done
+
+
+for i in ./*tmp
+do
+    tr "," "\\t" < $i > ${i%.tmp}_barcodes.txt
+done
+
+
+```
+
+
+## Popmaps
+
+Need to write popmaps before running gstacks
+
+# Process Radtags
+
+Process radtags ran with the following options:  
+-P paired  
+-c remove any read with an uncalled base  
+-q remove any read with low quality  
+-r rescue barcodes  
+
+example slurm script for process radtags, script below is called (sbatch) from directory plastic/stacks/cleaned
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set the number of nodes
+#SBATCH --nodes=1
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of output file
+#SBATCH --output=library_%a_process_radtags.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+#set the array
+#SBATCH --array=13,14,15,16,17,18,19,20,8
+
+# set name of job
+#SBATCH --job-name=library_13-20_process_radtags
+
+source /opt/stacks/2.3/bin/source_me
+/opt/stacks/2.3/bin/process_radtags -P  -p ../../seq_data/run2/pls-${SLURM_ARRAY_TASK_ID} -b ../info/library_${SLURM_ARRAY_TASK_ID}_barcodes.txt -o ./ -e pstI --inline-null -c -q -r --adapter-1 GATCGGAAGAGCGGTTCAGCAGGAATGCCGAGACCGATCAGAACAA --adapter-2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCAT --adapter_mm 2 &> pr_library_${SLURM_ARRAY_TASK_ID}.oe
+```
+
+```{bash,eval=FALSE}
+#to concatenate the basic log files from process radtogs
+
+libs="68
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+65
+66
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+67
+"
+awk 'NR==3' process_radtags.pls-33.log > process_radtags_master_log.txt
+for lib in $libs; do ; awk 'NR==4' process_radtags.pls_${lib}.log >> process_radtags_master_log.txt
+```
+
+Here are some basic outputs from the process radtags run
+```{r, cache=TRUE, message=FALSE}
+pr <- read_tsv("log_files/run1.0/process_radtags_master_log.txt")
+
+a <- ggplot(data=pr)+geom_histogram(aes(x=`Retained Reads`))+ggtitle("total retained reads")
+b <- ggplot(data=pr)+geom_density(aes(x=`Adapter Seq`/Total))+ggtitle("adapter contamination")
+c <- ggplot(data=pr)+geom_density(aes(x=`Low Quality`/Total))+ggtitle("low quality")
+d <- ggplot(data=pr)+geom_density(aes(x=`Barcode Not Found`/Total))+ggtitle("Barcode Not Found")
+e <- ggplot(data=pr)+geom_density(aes(x=`RAD cutsite Not Found`/Total))+ggtitle("No Cutsite")
+f<- ggplot(data=pr)+geom_density(aes(x=`Retained Reads`/Total))+ggtitle("Portion Retained")
+
+
+
+plot_grid(a,f,b,c,d,e, ncol =2)
+```
+
+Most data is lost to contamination (adapter contamination and barcode not found drops) and amounts to ~78% data retention.
+
+Median number of reads is ~ 600million per lane
+
+
+# Alignment
+
+For each batch, concatenate the fish ids from 
+```{bash eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=bwa_default
+
+# set name of output file
+#SBATCH --output=bwadefault.out
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/samtools/1.6/source_me
+files="
+"
+
+#
+# Align paired-end data with Bpwtie2, convert to BAM and SORT.
+#
+
+for sample in $files
+do 
+/opt/bio-bwa/bwa mem -t 10 ../genome/bwa_gac ../cleaned/${sample}.1.fq.gz ../cleaned/${sample}.2.fq.gz | /opt/samtools/1.6/bin/samtools view -@ 10 -bSu - | /opt/samtools/1.6/bin/samtools sort -@ 10 - -o ./${sample}.bam &> bwa_mem.oe
+
+done
+
+```
+
+~2.2 minutes per sample when running 6 of in parallel
+
+# gstacks
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=20-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=month-long-bigmem
+
+# set name of job
+#SBATCH --job-name=gstacks
+
+# set name of output file
+#SBATCH --output=gstacks.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+
+source /opt/stacks/2.3/bin/source_me
+/opt/stacks/2.3/bin/gstacks -I ../alignments/ -M ../info/../info/pop_map.txt --rm-pcr-duplicates -O ./ -t 10 &> gstacks_log.oe
+
+
+```
+
+## Bamstats
+
+first we look at coverage of the data going into stacks, the bam files
+
+pulled up the bamstats from log output of gstacks ("gstacks.log.distribs"), then edited file with regex include a population flag
+
+```{r, warning=FALSE, message=FALSE}
+bamstats <- read_tsv("log_files/run1.0/gstacks/bam_stats1.0.txt")
+ggplot(data = bamstats)+geom_density(aes(x=primary_kept))+geom_vline(aes(xintercept = median(bamstats$primary_kept)), color = "red")+ggtitle("Retained record from BAM input")
+bamstats %>%
+  group_by(pop) %>%
+  summarise(median_forward_reads = median(primary_kept), mean_kept = mean(kept_frac) )
+```
+
+Here we see no issue with variation in mapping quality across the populations and good evidence that we got more than the number of reads we were looking for per individual. ~14 million total reads per samples (or 7.5million pairs), which if we have about 350k rad loci works out to about 20x coverage before filtering sites (but after filtering for bad reads in the process_radtags fork). 
+
+We lost about 16% of the reads in the bam files to default quality filters in the gstacks fork (minmapq 10, max-clipped 0.20, unmapped reads) summary below:
+
+>Read 38,505,561,773 BAM records:  
+  kept 31589809638 primary alignments (83.9%), of which 15560702018 reverse reads  
+  skipped 2472966745 primary alignments with insufficient mapping qualities (6.6%)  
+  skipped 2433081192 excessively soft-clipped primary alignments (6.5%)  
+  skipped 1149879071 unmapped reads (3.1%)  
+  skipped some suboptimal (secondary/supplementary) alignment records  
+
+At this point the expected coverage is ~ 24x (38,505,561,773 paired reads per 2279 samples (about 6 million reads per sample) per estimated 350k rad loci), but as we'll see there are many more rad loci than expected.
+
+## Raw Genotypes Coverage
+
+similar to above, we pulled the distribution of effective coverage from the stacks logs, edited to include a population flag and examined below
+
+First, the summary output from gstacks.log:
+
+>  
+Built 1922504 loci comprising 16029107620 forward reads and 14566108785 matching paired-end reads; mean insert length was 249.4 (sd: 78.2).  
+Removed 1462998835 unpaired (forward) reads (9.1%); kept 14566108785 read pairs in 1788198 loci.  
+Removed 3758113517 read pairs whose insert length had already been seen in the same sample as putative PCR duplicates (25.8%); kept 10807995268 read pairs.  
+  
+>Genotyped 1788198 loci:  
+  effective per-sample coverage: mean=11.8x, stdev=5.8x, min=1.0x, max=40.1x  
+  mean number of sites per locus: 437.7  
+  a consistent phasing was found for 229618780 of out 241108686 (95.2%) diploid loci needing phasing  
+  
+__Quick summary:__ 26% PCR duplicates + vastly more rad loci than expected leads to drastic reduction in coverage... but lets look more closely
+
+```{r, warning=FALSE, message=FALSE }
+eff_cov <- read_tsv("log_files/run1.0/gstacks/effective_coverage1.0.txt")
+a <- ggplot(data=eff_cov)+geom_density(aes(x= n_loci))+geom_vline(aes(xintercept=median(eff_cov$n_loci)), color = "red")+ggtitle("Number of Rad Loci")
+b <- ggplot(data=eff_cov)+geom_density(aes(x= mean_cov_ns))+geom_vline(aes(xintercept=median(eff_cov$mean_cov_ns)), color = "red")+ggtitle("weighted mean coverage")
+c <- ggplot(data=eff_cov)+geom_density(aes(x= pcr_dupl_rate))+geom_vline(aes(xintercept=median(eff_cov$pcr_dupl_rate)), color = "red")+ggtitle("pcr duplicates")
+d <- ggplot(data = eff_cov)+geom_point(aes(pcr_dupl_rate, mean_cov_ns), alpha = 0.1) +geom_smooth(aes(pcr_dupl_rate, mean_cov_ns), method = "lm") 
+plot_grid(a,b,c,d)
+rm(a,b,c,d)
+
+```
+
+__Conclusions__:  
+
+At any one individual, the number of rad loci is much lower, suggesting the majority of loci are due to mismapping or allele dropout variants. The true number of rad loci appears to be more in line with 400-600k.  
+
+About 50% of samples have less than 12x effective coverage, and this seems largely to be caused by (1) a great increase in the number of rad loci realtive to what was expected given other papers numbers for the number of PstI cut sites and my own in silico digest and (2) PCR duplicates take up anywhere from ~0% to 80% of the reads depending on the library (it's clear that the variation in pcr duplication rate is explained by variation at the level of library prep given the clustering in the last plot above). 
+
+quick note: a previous examination of PCR duplication reveals that only 0.6% of duplicates appear to be optical duplicates, suggesting that library complexity is the root issue here, not sequencing.
+
+# Populations and Filtering
+
+This section covers filtering the final SNP matrix using VCFtools and the populations fork of stacks
+
+## Filtering Summary
+
+Iterative filtering procedure, getting rid of the worst sites, then worst individuals, then do QC based filtering (depth, allele balance, MAS, etc), then check coverage and error rates
+
+__Filtering Protocol Outline__ 
+1. Process Radtags  
+    + keep only paired reads  
+    + remove any read with an uncalled base  
+    + remove any read with low quality  
+2. gstacks (1.0)  
+    + remove pcr duplicates  
+    + min-mapq: 10  
+    + max-clipped: 0.2  
+    + max insert length: 1000bp  
+    + only good paired reads  
+    + 5% p-value under maruki_low model for SNP calling and %5 for genotying  
+3. Poorly Sequenced Individuals + Bad Loci(1.1)  
+    + remove individuals from popmap with less than (mean - 2sd) number of good reads in bam file    
+4. Low confidence SNPs 1 (1.2) 
+    + minDepth (genotype) 5x  
+    + minMeanDepth (SNP) 10x  
+5. Iterative Missingness Filter  
+    + inds with more than 90% missing data  
+    + genotypes with > 50% missing data  
+    + inds with >50% missing  
+    + genotypes with >80% missing  
+6. Paralogues (decide on which of these later)
+    + allele balance (less than 0.2) 
+    + high coverage  (greater than 3x modal coverage)
+
+notes:
+this could be sped up/ code made a lot cleaner if we didn't write the vcf file out for each step (i.e. do it the "right way" by adding filter flags to loci in the master vcf)
+
+
+## 1.1 - Bad Inds
+
+The first filter removes individuals with the worst coverage and writes out a vcf to do our filtering on.
+
+This step exceeded the available memory, so tried to break it into smaller pieces, ultimately the only thing that could squeak under the threshold was to limit the number of data structures being opened by running each population separately
+
+```{r}
+# make the new popmap of good inds
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 0) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0a.txt", col_names = FALSE)
+
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 1) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0b.txt", col_names = FALSE)
+  
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 2) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0c.txt", col_names = FALSE)  
+
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 3) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0d.txt", col_names = FALSE)
+  
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 4) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0e.txt", col_names = FALSE)
+
+bamstats %>%
+  filter(primary_kept > mean(primary_kept)-(2*sd(primary_kept))) %>%
+  select(sample, pop) %>%
+  filter(row_number() %% 6 == 5) %>%
+  write_tsv("./log_files/run1.0/good_inds_pop_map1.0f.txt", col_names = FALSE)
+
+```
+
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=week-long-cpu
+
+# set name of job
+#SBATCH --job-name=popfilt1.1f
+
+# set name of output file
+#SBATCH --output=popfilt1.1f.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+source /opt/stacks/2.3/bin/source_me
+/opt/stacks/2.3/bin/populations --in-path ../ -M ../../info/good_inds_pop_map1.0f.txt -t 10   --vcf --ordered-export -O ./ --merge_sites -e pstI &> popfilt1.1f.oe
+
+```
+
+```{bash, eval=FALSE}
+
+#this did not work because of the ways stacks writes out the vcf: ref allele is major allele in the population, not thte ref genome, therefore populations with minor alleles in the ref as major couldn't be merged using bcftools, vcftools or picard, even trying to "fix" the ref allele in using the +fixref plugin from bcftools didnot work, so tried a different approach
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=vcf_merge
+
+# set name of output file
+#SBATCH --output=vcfmerge.out
+
+
+
+bgzip -@ 10 ./populations.snps.vcf
+bgzip -@ 10 ../bb/populations.snps.vcf
+bgzip -@ 10 ../lb/populations.snps.vcf
+bgzip -@ 10 ../rs/rs1/populations.snps.vcf
+bgzip -@ 10 ../rs/rs2/populations.snps.vcf
+
+
+module load bcftools
+
+tabix -p vcf ../cl/populations.snps.vcf.gz
+tabix -p vcf ../bb/populations.snps.vcf.gz
+tabix -p vcf ../lb/populations.snps.vcf.gz
+tabix -p vcf ../rs/rs1/populations.snps.vcf.gz
+tabix -p vcf ../rs/rs2/populations.snps.vcf.gz
+
+bcftools merge ../cl/populations.snps.vcf.gz ../lb/populations.snps.vcf.gz ../bb/populations.snps.vcf.gz ../rs/rs1/populations.snps.vcf ../rs/rs2/populations.snps.vcf -Oz --threads 10 -o ./1.1.vcf
+
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=vcf_merge
+
+# set name of output file
+#SBATCH --output=vcfmerge.out
+
+
+module load bcftools
+bgzip -@ 10 populations.snps.vcf
+tabix -p vcf populations.snps.vcf.gz
+bcftools sort  ../cl/populations.snps.vcf.gz
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=vcf_mergeprep
+
+# set name of output file
+#SBATCH --output=vcfmergeprep.out
+
+#sort vcf
+mkdir tmp
+export PERL5LIB=/opt/vcftools_0.1.13/perl
+/opt/vcftools_0.1.13/bin/vcf-sort -t ./tmp ./populations.snps.vcf.gz > sorted.vcf
+
+#compress
+bgzip -@ 10 ./sorted.vcf
+
+#index
+tabix -p vcf ./sorted.vcf.gz
+
+
+####
+module load bcftools
+export BCFTOOLS_PLUGINS=/opt/bcftools/1.10.2/libexec/bcftools/
+bcftools +fixref ./sorted.vcf.gz -o sorted.stranded.bcf -Ob -- -f ~/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.fa  -m flip
+
+##### merge line
+bcftools merge ../cl/sorted.vcf.gz ../lb/sorted.vcf.gz  ../bb/sorted.vcf.gz  ../rs/rs1/sorted.vcf.gz  ../rs/rs2/sorted.vcf.gz f -Oz --threads 10 -o ./1.1.vcf
+
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=vcf_merge
+
+# set name of output file
+#SBATCH --output=vcfmerge.out
+
+##### merge line
+module load bcftools
+bcftools merge ../cl/sorted.vcf.gz ../lb/sorted.vcf.gz  ../bb/sorted.vcf.gz  ../rs/rs1/sorted.vcf.gz  -m id ../rs/rs2/sorted.vcf.gz -Oz --threads 10 -o ./1.1.vcf
+
+```
+
+check if ref-alt swap happened
+ bcftools view ../bb/sorted.stranded.bcf | head -10000 | cut -f 1-10 | grep "2439"
+ 
+then merge dataset and do iterative missingess filter
+problem here is that this still might crash the populations flag unless the number of loci is very low
+
+## 1.2 Low Confidence SNPs
+
+
+Within each pop (so that files can be made small enough to run together on the next round), we eliminate low confidence SNPs (filter out sites < 10 mean depth within population), and remove extremely low confidence genotypes (set individual genos with less than 5 reads to missing)
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=iterative_missingness_1
+
+# set name of output file
+#SBATCH --output=iterative_missingness_1.out
+
+#filter out bad inds then filter bad genos
+/opt/vcftools_0.1.13/vcftools  --vcf ./sorted.vcf.gz --minDP 5 --min-meanDP 10 --recode-INFO-all --recode --out 0.2
+
+```
+
+__Results__
+RS1: 1468668 out of a possible 7295585 sites  
+RS2: 1137702 out of a possible 7661031 sites  
+CL: 714341 out of a possible 6716812 Sites  
+BB: 898665 out of a possible 7277365 Sites  
+LB: 576283 out of a possible 6124157 Sites  
+
+## 1.3 Iterative Missingness 
+
+__Missing Inds 1__
+Next, we removed individuals with > 80% missing data
+
+```{bash, eval=FALSE}
+#ran this for each population
+
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=iterative_missingness_2
+
+# set name of output file
+#SBATCH --output=iterative_missingness_2.out
+
+
+#output missingess
+/opt/vcftools_0.1.13/vcftools  --vcf ./0.2.recode.vcf  --missing-indv
+
+#get inds with >50% missingess
+awk '$5 > 0.8 && NR>1 {print $1}' out.imiss > bad_inds1
+
+```
+
+Now that we have removed the worst inds and sites, lets merge the pops so that we have a single vcf to work with and filtering can be applied across the full dataset. This is achieved by running populations on the catalog loci using a culled popmap and a whitelist.
+
+The whitelist is the union join of the sites that pass filtering in any population (i.e. SNPS with mean coverage less than 10 in all pops are excluded from further analysis)
+
+```{bash, eval=FALSE}
+#create the joined whitelist
+#run this on each pop
+awk 'NR>15 {print $3}' 0.2.recode.vcf >> ../filtering/iterative_1_sites.txt 
+
+sort -n iterative_1_sites.txt | uniq > iterative_1_sites_unique.txt
+
+#format catalog number \t snp position (from "ID" field)
+
+#create dictionary for converting chrom_pos into stacks catalog ids 
+awk -F :  'BEGIN{OFS="\t"} {print $1,$2-1}' iterative_1_sites_unique.txt > whitelist1.txt
+
+
+
+```
+
+The whitelist contains 2,119,448 sites across 249,499 rad loci
+
+Next concat all the bad inds and remove them from the popmap. (removed 45 individuals with >80% of data set to missing (i.e no stacks call OR depth < 5x))
+
+```{bash, eval = FALSE}
+comm -1 -3 <(sort badinds1 ) <(sort <(cut -f 1 ../../info/good_inds_pop_map1.0.txt ))
+#then used regex to format this into a popmap
+```
+
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=6-23:59:00
+
+#SBATCH --cpus-per-task=10
+
+# set partition/queue to use
+#SBATCH --partition=week-long-bigmem
+
+# set name of job
+#SBATCH --job-name=popfilt1.1f
+
+# set name of output file
+#SBATCH --output=popfilt1.1f.out
+
+# mail alert at start, end and abortion of execution
+#SBATCH --mail-type=ALL
+
+# send mail to this address
+#SBATCH --mail-user=ddayan@clarku.edu
+
+#SBATCH --mem=200GB
+
+#run from the filtering/1.3 directory
+source /opt/stacks/2.3/bin/source_me
+/opt/stacks/2.3/bin/populations --in-path ../../ -M ../../../info/good_inds_pop_map1.3.txt -t 10   --vcf --ordered-export -O ./ --merge_sites -e pstI --whitelist ../whitelist1.txt &> popfilt1.3.oe
+```
+
+> Removed 1538699 loci that did not pass sample/population constraints from 1788198 loci.
+Kept 249499 loci, composed of 236453482 sites; 0 of those sites were filtered, 2118289 variant sites remained.
+    216082093 genomic sites, of which 20097218 were covered by multiple loci (9.3%).
+Mean genotyped sites per locus: 944.27bp (stderr 0.23).
+
+__Iterative Missingess Continued__
+
+Next Step is to restore the minDP and minmeanDP filters (running stacks again restored GTs with <5 reads from missing)
+Then filter 
+    + allow genotypes with 50% or less missing data 
+    + inds with >50% missing  
+    + allwo genotypes with 20% or less missing data 
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=iterative_missingness_2
+
+# set name of output file
+#SBATCH --output=iterative_missingness_2.out
+
+#filter out bad inds then filter bad genos
+#1.4
+/opt/vcftools_0.1.13/vcftools  --vcf ./1.3/populations.snps.vcf --minDP 5 --min-meanDP 10 --recode-INFO-all --recode --out 1.4
+
+#1.5
+/opt/vcftools_0.1.13/vcftools  --vcf ./1.4.recode.vcf --max-missing 0.5 --recode-INFO-all --recode --out 1.5
+
+/opt/vcftools_0.1.13/vcftools  --vcf 1.5.recode.vcf  --missing-indv
+
+#get inds with >50% missingess
+awk '$5 > 0.5 && NR>1 {print $1}' out.imiss > bad_inds2
+
+#1.6
+/opt/vcftools_0.1.13/vcftools  --vcf 1.5.recode.vcf  --remove bad_inds2 --max-missing 0.8 --recode-INFO-all --recode --out 1.6
+
+
+```
+
+1.4: After filtering, kept 1826184 out of a possible 2117720 Sites. (set GT less than 5 to missing, remove sites with mean coverage less than 10x)  
+1.5:  (remove sites with more than 50% missing data)  
+BadInds2:  (remove inds with more than 50% missing data)  
+1.6:  (remove sites with more than 20% missing data)
+
+## 1.7 Paralogs
+
+Next we filter out potential paralogs using allele balance and coverage.
+
+```{bash, eval = FALSE}
+#!/bin/bash
+
+# set max wall-clock time (D-HH:MM:SS)
+#SBATCH --time=0-23:59:00
+
+#SBATCH --cpus-per-task=1
+
+# set partition/queue to use
+#SBATCH --partition=day-long-cpu
+
+# set name of job
+#SBATCH --job-name=allele_balance
+
+# set name of output file
+#SBATCH --output=allele_balance.out
+
+#first indexed the genome with samtools (faidx) and created a sequence dictionary wtih picard (see 0.1 log)
+
+#alias picard
+picard="/opt/java/openjdk-1.8.0/bin/java -Xmx100GB -jar /opt/picard/build/libs/picard.jar"
+
+#sort the vcf
+$picard SortVcf \
+      I=./1.6.recode.vcf \
+      SEQUENCE_DICTIONARY=/home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.dict \
+      O=1.6.sorted.vcf
+      
+
+#now anotate the genotypes with the allele balance tag
+GATK="/opt/java/openjdk-1.8.0/bin/java -jar /opt/Gatk/GenomeAnalysisTK.jar "
+$GATK    -R /home/ddayan/plastic/stacks/genome/Gasterosteus_aculeatus.BROADS1.dna_sm.toplevel.fa \
+  -V ./1.6.sorted.vcf \
+  -T VariantAnnotator \
+  -o ./1.6.annotated.vcf \
+  --annotation AlleleBalance \
+  -U ALLOW_SEQ_DICT_INCOMPATIBILITY
+
+#filter 
+$picard FilterVcf  I=/home/ddayan/plastic/stacks/genotypes/filtering/1.6.annotated.vcf O=0.5.vcf MIN_AB=0.2 
+
+```
+

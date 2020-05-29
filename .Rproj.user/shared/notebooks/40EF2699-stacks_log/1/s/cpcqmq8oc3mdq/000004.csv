@@ -1,3 +1,0 @@
-"0","bamstats %>%"
-"0","  group_by(pop) %>%"
-"0","  summarise(median_forward_reads = median(primary_kept), mean_kept = mean(kept_frac) )"
